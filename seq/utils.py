@@ -1,16 +1,18 @@
 import os
 import sys
 from collections import OrderedDict
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy
 from gensim.models import KeyedVectors
-from sklearn.metrics import f1_score
 import torch
 import torch.nn.functional as F
 
 from data_loader import EPDataLoader
 from seq2seq import Seq2seq
+
+
+EOS = 2
 
 
 def calculate_loss(output: torch.Tensor,  # (batch, max_seq_len + 1, vocab_size)
@@ -19,31 +21,17 @@ def calculate_loss(output: torch.Tensor,  # (batch, max_seq_len + 1, vocab_size)
                    ) -> torch.Tensor:
     v = output.size(2)
     prediction = F.softmax(output, dim=1).contiguous().view(-1, v)
-    truth = truth.contiguous().view(-1)
+    truth = truth.view(-1)
     loss = loss_function(prediction, truth)
     return loss
-
-
-def accuracy(output: torch.Tensor,  # (batch, n_class)
-             target: torch.Tensor   # (batch)
-             ) -> int:
-    prediction = torch.argmax(output, dim=1)
-    return (prediction == target).sum().item()
-
-
-def f_measure(output: torch.Tensor,  # (batch, n_class)
-              target: torch.Tensor   # (batch)
-              ) -> int:
-    prediction = torch.argmax(output, dim=1)
-    f_score = f1_score(target.cpu(), prediction.cpu(), average='macro')
-    return f_score
 
 
 def load_vocabulary(path: str
                     ) -> Tuple[Dict[str, int], Dict[int, str]]:
     with open(path, "r") as f:
-        word_to_id = {f'{key.strip()}': i + 3 for i, key in enumerate(f)}
-        id_to_word = {i + 3: f'{key.strip()}' for i, key in enumerate(f)}
+        lines = [line for line in f]
+        word_to_id = {f'{key.strip()}': i + 3 for i, key in enumerate(lines)}
+        id_to_word = {i + 3: f'{key.strip()}' for i, key in enumerate(lines)}
     word_to_id['<PAD>'] = 0
     word_to_id['<UNK>'] = 1
     word_to_id['<EOS>'] = 2
@@ -72,8 +60,8 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
                  ):
     torch.manual_seed(config['arguments']['seed'])
 
-    path = 'debug' if args.debug else 'sentences'
-    word_to_id, _ = load_vocabulary(config[path]['vocabulary'])
+    path = 'debug' if args.debug else 'evpairs'
+    word_to_id, id_to_word = load_vocabulary(config[path]['vocabulary'])
     w2v = KeyedVectors.load_word2vec_format(config[path]['w2v'], binary=True)
     embeddings = ids_to_embeddings(word_to_id, w2v)
 
@@ -108,7 +96,7 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
     # build optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=config['arguments']['learning_rate'])
 
-    return model, device, train_data_loader, valid_data_loader, optimizer
+    return id_to_word, model, device, train_data_loader, valid_data_loader, optimizer
 
 
 def load_tester(config: Dict[str, Dict[str, str or int]],
@@ -142,11 +130,11 @@ def load_tester(config: Dict[str, Dict[str, str or int]],
     model.to(device)
 
     # setup data_loader instances
-    path = 'debug' if args.debug else 'data'
+    path = 'debug' if args.debug else 'evpairs'
     word_to_id, _ = load_vocabulary(config[path]['vocabulary'])
 
     test_data_loader = EPDataLoader(config[path]['test'], word_to_id, config['arguments']['max_seq_len'],
-                                  batch_size=config['arguments']['batch_size'], shuffle=True, num_workers=2)
+                                    batch_size=config['arguments']['batch_size'], shuffle=True, num_workers=2)
 
     # build optimizer
     return model, device, test_data_loader
@@ -174,3 +162,9 @@ def create_config(config: Dict[str, Dict[str, str or int]],
                             "test": "debug/test.txt"}
     save_config['params'] = params
     return save_config
+
+
+def translate(predictions: List[List[int]],
+              id_to_word: Dict[int, str]
+              ) -> List[List[Any]]:
+    return [[id_to_word[int(p)] for p in prediction if int(p) != EOS] for prediction in predictions]

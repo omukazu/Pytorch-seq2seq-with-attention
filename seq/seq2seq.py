@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
+PAD = 0
 EOS = 2
 
 
@@ -119,12 +120,42 @@ class Seq2seq(nn.Module):
             h[0] = h[0].contiguous().view(self.n_enc_layer, self.n_direction, batch_size, -1).transpose(1, 2)[:self.n_dec_layer].contiguous().view(self.n_dec_layer, batch_size, -1)
             h[1] = h[1].contiguous().view(self.n_enc_layer, self.n_direction, batch_size, -1).transpose(1, 2)[:self.n_dec_layer].contiguous().view(self.n_dec_layer, batch_size, -1)
 
+        os = embedded_s.new_zeros(batch_size, self.max_seq_len + 1, self.vocab_size)
         embedded_t = self.target_embed(target).transpose(0, 1).unsqueeze(2)  # (max_seq_len + 1, batch, 1, d_emb)
-        os = embedded_t.new_zeros(batch_size, self.max_seq_len + 1, self.vocab_size)
         for i in range(self.max_seq_len + 1):
             if self.attention:
                 # TODO: calculate attention
                 pass
             dec_out, h = self.decoder(embedded_t[i], target_mask[:, i], h)
             os[:, i, :] += self.w(dec_out.squeeze(1))  # (batch, vocab_size)
+        return os
+
+    def predict(self,
+                source: torch.Tensor,
+                source_mask: torch.Tensor,
+                ):
+        self.eval()
+        with torch.no_grad():
+            batch_size = source.size(0)
+            embedded_s = self.source_embed(source)  # (batch, max_seq_len, d_emb)
+            enc_out, h = self.encoder(embedded_s, source_mask, None)
+            if self.bi_directional:
+                # (n_layer * n_direction, batch, d_hidden) -> (n_layer, batch, d_hidden * n_direction)
+                h[0] = h[0].contiguous().view(self.n_enc_layer, self.n_direction, batch_size, -1).transpose(1, 2)[
+                       :self.n_dec_layer].contiguous().view(self.n_dec_layer, batch_size, -1)
+                h[1] = h[1].contiguous().view(self.n_enc_layer, self.n_direction, batch_size, -1).transpose(1, 2)[
+                       :self.n_dec_layer].contiguous().view(self.n_dec_layer, batch_size, -1)
+
+            tensor_type = 'torch.cuda.LongTensor' if source.device.index is not None else 'torch.LongTensor'
+            target = torch.full((batch_size, 1), EOS).type(tensor_type).to(source.device)
+            target_mask = torch.full((batch_size, 1), 1).type(tensor_type).squeeze(-1).to(source.device)
+            dec_out = self.target_embed(target)
+            os = []
+            for i in range(self.max_seq_len + 1):
+                if self.attention:
+                    pass
+                dec_out, h = self.decoder(dec_out, target_mask, h)
+                prediction = torch.argmax(self.w(dec_out.squeeze(1)), dim=1) + 1  # (batch, vocab_size)
+                target_mask = prediction.ne(EOS)
+                os.append(prediction)
         return os

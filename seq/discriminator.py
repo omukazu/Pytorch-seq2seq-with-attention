@@ -63,9 +63,9 @@ class Discriminator(nn.Module):
     # return predictions
     def forward(self,
                 xs: torch.Tensor,  # positive and negative latter events
-                ts: torch.Tensor,  # tag representing whether the latter event is generated or not
+                ts: torch.Tensor,  # tag representing whether the latter is generated or not
                 ) -> torch.Tensor:
-        embedded = self.embed(xs).unsqueeze(1)  # (batch, 1, max_seq_len, d_emb
+        embedded = self.embed(xs).unsqueeze(1)  # (batch, 1, max_seq_len, d_emb)
 
         pooled = self.poolings[0](embedded)
         for pooling in self.poolings[1:]:

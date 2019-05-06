@@ -7,7 +7,7 @@ import torch
 from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
 
-from utils import calculate_loss, load_setting, create_save_file_name, create_config
+from utils import calculate_loss, load_setting, create_save_file_name, create_config, translate
 
 
 def main():
@@ -22,14 +22,14 @@ def main():
 
     os.makedirs(os.path.dirname(config['arguments']['save_path']), exist_ok=True)
 
-    model, device, train_data_loader, valid_data_loader, optimizer = load_setting(config, args)
+    id_to_word, model, device, train_data_loader, valid_data_loader, optimizer = load_setting(config, args)
     # params = model.module.params if len(args.gpu) > 1 else model.params
     # file_name = create_save_file_name(config, params)
     # with open(os.path.join(config['arguments']['save_path'], f'best_{file_name}.config'), "w") as f:
     #     json.dump(create_config(config, params), f, indent=4)
 
     best_acc = 0
-    place_holder = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+    place_holder = CrossEntropyLoss(ignore_index=-1, reduction='sum')
 
     for epoch in range(1, config['arguments']['epoch'] + 1):
         print(f'*** epoch {epoch} ***')
@@ -53,7 +53,7 @@ def main():
             optimizer.step()
 
             total_loss += loss.item()
-        print(f'train_loss={total_loss / train_data_loader.n_samples:.3f}', end=' ')
+        print(f'train_loss={total_loss / train_data_loader.n_samples:.6f}', end=' ')
 
         # validation
         model.eval()
@@ -68,10 +68,15 @@ def main():
                 mask_ys = mask_ys.to(device)
 
                 output = model(source, mask_xs, target, mask_ys)
+                predict = model.predict(source, mask_xs)
+                s_translation = translate(source[:5], id_to_word)
+                t_translation = translate(predict[:5], id_to_word)
+                for s, t in zip(s_translation, t_translation):
+                    print(f'source:{" ".join(s)} / target:{" ".join(t)}')
 
                 total_loss += calculate_loss(output, truth, place_holder)
                 # num_iter = batch_idx + 1
-        print(f'valid_loss={total_loss / valid_data_loader.n_samples:.3f}', end=' ')
+        print(f'valid_loss={total_loss / valid_data_loader.n_samples:.6f}', end=' ')
         # if valid_acc > best_acc:
     torch.save(model.state_dict(),
                os.path.join(config['arguments']['save_path'], f'sample.pth'))
