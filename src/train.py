@@ -7,7 +7,7 @@ import torch
 from torch.nn import CrossEntropyLoss
 from tqdm import tqdm
 
-from utils import calculate_loss, load_setting, create_save_file_name, create_config, translate
+from utils import calculate_loss, load_setting, translate
 
 
 def main():
@@ -23,10 +23,6 @@ def main():
     os.makedirs(os.path.dirname(config['arguments']['save_path']), exist_ok=True)
 
     id_to_word, model, device, train_data_loader, valid_data_loader, optimizer = load_setting(config, args)
-    # params = model.module.params if len(args.gpu) > 1 else model.params
-    # file_name = create_save_file_name(config, params)
-    # with open(os.path.join(config['arguments']['save_path'], f'best_{file_name}.config'), "w") as f:
-    #     json.dump(create_config(config, params), f, indent=4)
 
     best_acc = 0
     place_holder = CrossEntropyLoss(ignore_index=-1, reduction='sum')
@@ -68,7 +64,7 @@ def main():
                 mask_ys = mask_ys.to(device)
 
                 output = model(source, mask_xs, target, mask_ys)
-                predict = model.predict(source, mask_xs)
+                predict = model.predict(source, mask_xs)  # (batch, max_seq_len)
                 s_translation = translate(source[:5], id_to_word)
                 t_translation = translate(predict[:5], id_to_word)
                 for s, t in zip(s_translation, t_translation):

@@ -1,6 +1,5 @@
 import os
 import sys
-from collections import OrderedDict
 from typing import Any, Dict, List, Tuple
 
 import numpy
@@ -10,17 +9,15 @@ import torch.nn.functional as F
 
 from data_loader import EPDataLoader
 from seq2seq import Seq2seq
-
-
-EOS = 2
+from constants import PAD, UNK, EOS
 
 
 def calculate_loss(output: torch.Tensor,  # (batch, max_seq_len + 1, vocab_size)
-                   truth: torch.Tensor,  # (batch, max_seq_len + 1)
+                   truth: torch.Tensor,   # (batch, max_seq_len + 1)
                    loss_function: torch.nn.Module
                    ) -> torch.Tensor:
-    v = output.size(2)
-    prediction = F.softmax(output, dim=1).contiguous().view(-1, v)
+    vocab_size = output.size(2)
+    prediction = F.softmax(output, dim=1).contiguous().view(-1, vocab_size)
     truth = truth.view(-1)
     loss = loss_function(prediction, truth)
     return loss
@@ -30,14 +27,14 @@ def load_vocabulary(path: str
                     ) -> Tuple[Dict[str, int], Dict[int, str]]:
     with open(path, "r") as f:
         lines = [line for line in f]
-        word_to_id = {f'{key.strip()}': i + 3 for i, key in enumerate(lines)}
-        id_to_word = {i + 3: f'{key.strip()}' for i, key in enumerate(lines)}
-    word_to_id['<PAD>'] = 0
-    word_to_id['<UNK>'] = 1
-    word_to_id['<EOS>'] = 2
-    id_to_word[0] = '<PAD>'
-    id_to_word[1] = '<UNK>'
-    id_to_word[2] = '<EOS>'
+    word_to_id = {f'{key.strip()}': i + 3 for i, key in enumerate(lines)}
+    word_to_id['<PAD>'] = PAD
+    word_to_id['<UNK>'] = UNK
+    word_to_id['<EOS>'] = EOS
+    id_to_word = {i + 3: f'{key.strip()}' for i, key in enumerate(lines)}
+    id_to_word[PAD] = '<PAD>'
+    id_to_word[UNK] = '<UNK>'
+    id_to_word[EOS] = '<EOS>'
     return word_to_id, id_to_word
 
 
@@ -60,9 +57,9 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
                  ):
     torch.manual_seed(config['arguments']['seed'])
 
-    path = 'debug' if args.debug else 'evpairs'
+    path = 'debug' if args.debug else 'data'
     word_to_id, id_to_word = load_vocabulary(config[path]['vocabulary'])
-    w2v = KeyedVectors.load_word2vec_format(config[path]['w2v'], binary=True)
+    w2v = KeyedVectors.load_word2vec_format(config[path]['w2v'], binary=True, unicode_errors='ignore')
     embeddings = ids_to_embeddings(word_to_id, w2v)
 
     if config['arguments']['model_name'] == 'Seq2seq':
@@ -131,40 +128,16 @@ def load_tester(config: Dict[str, Dict[str, str or int]],
 
     # setup data_loader instances
     path = 'debug' if args.debug else 'evpairs'
-    word_to_id, _ = load_vocabulary(config[path]['vocabulary'])
+    word_to_id, id_to_word = load_vocabulary(config[path]['vocabulary'])
 
     test_data_loader = EPDataLoader(config[path]['test'], word_to_id, config['arguments']['max_seq_len'],
                                     batch_size=config['arguments']['batch_size'], shuffle=True, num_workers=2)
 
     # build optimizer
-    return model, device, test_data_loader
+    return id_to_word, model, device, test_data_loader
 
 
-def create_save_file_name(config: Dict[str, Dict[str, str or int]],
-                          params: Dict[str, Any]
-                          ) -> str:
-    d = config['arguments']
-    base = f'{d["model_name"]}-d_hidden:{d["d_hidden"]}-max_seq_len:{d["max_seq_len"]}'
-    attributes = "-".join([f'{k}:{v}' for k, v in params.items()])
-    return base + '-' + attributes
-
-
-def create_config(config: Dict[str, Dict[str, str or int]],
-                  params: Dict[str, Any]
-                  ) -> Dict[str, Dict[str, str or int]]:
-    save_config = OrderedDict()
-    save_config['arguments'] = config['arguments']
-    save_config['test'] = {"vocabulary": "/mnt/larch_f/omura/shinjin/vocab.txt",
-                           "w2v": "/mnt/windroot/share/word2vec/2016.08.02/w2v.midasi.256.100K.bin",
-                           "test": "/mnt/hinoki_f/ueda/shinjin2019/acp-2.0/test.txt"}
-    save_config['debug'] = {"vocabulary": "debug/vocab.txt",
-                            "w2v": "debug/w2v.midasi.256.100K.bin",
-                            "test": "debug/test.txt"}
-    save_config['params'] = params
-    return save_config
-
-
-def translate(predictions: List[List[int]],
+def translate(predictions: torch.Tensor,
               id_to_word: Dict[int, str]
               ) -> List[List[Any]]:
-    return [[id_to_word[int(p)] for p in prediction if int(p) != EOS] for prediction in predictions]
+    return [[id_to_word[int(p)] for p in prediction if int(p) not in {PAD, EOS}] for prediction in predictions]

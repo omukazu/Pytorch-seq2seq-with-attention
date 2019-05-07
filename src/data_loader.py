@@ -3,16 +3,14 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
-PAD = 0
-EOS = 2
+from constants import PAD, EOS
 
 
 class EPDataset(Dataset):
     def __init__(self,
                  path: str,
                  word_to_id: Dict[str, int],
-                 max_seq_len: Optional[int],
-                 ) -> None:
+                 max_seq_len: Optional[int]):
         self.word_to_id = word_to_id
         self.max_seq_len = max_seq_len
         self.sources, self.targets = self._load(path)
@@ -26,16 +24,17 @@ class EPDataset(Dataset):
                     idx
                     ) -> Tuple[np.ndarray, np.ndarray, Tuple[np.ndarray, np.ndarray], np.ndarray]:
         source_len = len(self.sources[idx])
-        target_len = len(self.targets[idx][0])
         source_pad: List[int] = [PAD] * (self.max_seq_len - source_len)
-        target_pad: List[int] = [PAD] * (self.max_seq_len + 1 - target_len)
         source = np.array(self.sources[idx] + source_pad)
+        source_mask = np.array([1] * source_len + [0] * (self.max_seq_len - source_len))
+
+        target_len = len(self.targets[idx][0])
+        target_pad: List[int] = [PAD] * (self.max_seq_len + 1 - target_len)
         target_inp = np.array(self.targets[idx][0] + target_pad)
         target_out = np.array(self.targets[idx][1] + target_pad)
         targets = (target_inp, target_out)
-        mask_xs = np.array([1] * source_len + [0] * (self.max_seq_len - source_len))
-        mask_ys = np.array([1] * target_len + [0] * (self.max_seq_len + 1 - target_len))
-        return source, mask_xs, targets, mask_ys
+        target_mask = np.array([1] * target_len + [0] * (self.max_seq_len + 1 - target_len))
+        return source, source_mask, targets, target_mask
 
     def _load(self,
               path: str,
@@ -66,7 +65,6 @@ class EPDataset(Dataset):
                         target_inp_ids.append(self.word_to_id['<UNK>'])
                         target_out_ids.append(self.word_to_id['<UNK>'])
                 target_out_ids.append(EOS)
-
                 if self.max_seq_len is not None and len(target_inp_ids) > self.max_seq_len + 1:
                     target_inp_ids = target_inp_ids[:self.max_seq_len + 1]
                     target_out_ids = target_out_ids[:self.max_seq_len] + [EOS]
@@ -81,8 +79,7 @@ class EPDataLoader(DataLoader):
                  max_seq_len: Optional[int],
                  batch_size: int,
                  shuffle: bool,
-                 num_workers: int
-                 ):
+                 num_workers: int):
         self.dataset = EPDataset(path, word_to_id, max_seq_len)
         self.n_samples = len(self.dataset)
         super(EPDataLoader, self).__init__(self.dataset,
