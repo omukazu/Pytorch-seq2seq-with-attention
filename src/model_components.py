@@ -14,19 +14,21 @@ class Encoder(nn.Module):
         self.dropout = nn.Dropout(p=dropout_rate)
 
     def forward(self,
-                x: torch.Tensor,
-                mask: torch.Tensor,
-                h: Optional[Tuple[torch.Tensor, torch.Tensor]]
+                source: torch.Tensor,       # (batch, max_source_len, d_emb)
+                source_mask: torch.Tensor,  # (batch, max_source_len)
                 ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
-        sorted_lengths, perm_indices = (mask.cumsum(dim=1)[:, -1]).sort(0, descending=True)
+        lengths = source_mask.cumsum(dim=1)[:, -1]
+        sorted_lengths, perm_indices = lengths.sort(0, descending=True)
+        sorted_input = source.index_select(0, perm_indices)
         _, unperm_indices = perm_indices.sort(0)
 
         # masking
-        packed = pack_padded_sequence(x[perm_indices], lengths=sorted_lengths, batch_first=True)
-        output, h = self.rnn(packed, h)  # (sum(lengths), hid*2)
+        packed = pack_padded_sequence(sorted_input, lengths=sorted_lengths, batch_first=True)
+        output, h = self.rnn(packed, None)  # (sum(lengths), hid*2)
         unpacked, _ = pad_packed_sequence(output, batch_first=True, padding_value=0)
-        # (batch, max_seq_len, d_hidden * 2), (n_layer * n_direction, batch, d_hidden * 2)
-        return self.dropout(unpacked[unperm_indices]), list(h)
+        restored = unpacked.index_select(0, unperm_indices)
+        # (batch, max_source_len, d_enc_hidden * n_direction), (n_layer * n_direction, batch, d_enc_hidden)
+        return restored, list(h)
 
 
 class Decoder(nn.Module):
@@ -37,30 +39,40 @@ class Decoder(nn.Module):
         self.rnn = rnn
         self.dropout = nn.Dropout(p=dropout_rate)
 
-    # stateless
+    # stateless, decode per word
     def forward(self,
-                x: torch.Tensor,                      # (batch, 1, d_emb)
-                mask: torch.Tensor,                   # (batch, 1)
-                hs: Tuple[torch.Tensor, torch.Tensor]  # ((n_lay * n_dir, b, d_hid), (n_lay * n_dir, b, d_hid))
-                ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
-        valid_len = mask.sum()
+                target_word: torch.Tensor,             # (b, 1, d_emb)
+                target_mask: torch.Tensor,             # (b, 1)
+                hs: Tuple[torch.Tensor, torch.Tensor]  # ((n_d_lay * n_dir, b, d_hid), (n_d_lay * n_dir, b, d_hid))
+                ) -> Tuple[torch.Tensor, Tuple[torch.Tensor]]:
+        valid_len = target_mask.sum()
 
         if valid_len > 0:
-            batch_size = x.size(0)
-            sorted_lengths, perm_indices = mask.sort(0, descending=True)
+            batch = target_word.size(0)
+            sorted_lengths, perm_indices = target_mask.sort(0, descending=True)
+            sorted_input = target_word.index_select(0, perm_indices)
             _, unperm_indices = perm_indices.sort(0)
 
-            packed = pack_padded_sequence(x[perm_indices][:valid_len],
+            packed = pack_padded_sequence(sorted_input[:valid_len],
                                           lengths=sorted_lengths[:valid_len], batch_first=True)
             old_hs = [h.index_select(1, perm_indices)[:, valid_len:, :].contiguous() for h in hs]
-            hs = [h.index_select(1, perm_indices)[:, :valid_len, :].contiguous() for h in hs]
-            output, hs = self.rnn(packed, hs)
-            unpacked, _ = pad_packed_sequence(output, batch_first=True)
+            new_hs = [h.index_select(1, perm_indices)[:, :valid_len, :].contiguous() for h in hs]
+            output, new_hs = self.rnn(packed, new_hs)
+            unpacked, _ = pad_packed_sequence(output, batch_first=True)  # (b, 1, d_d_hid * 1)
 
-            if batch_size > valid_len:
-                _, _, d_out = x.size()
-                zeros = unpacked.new_zeros(batch_size - valid_len, 1, d_out)
-                unpacked = torch.cat((unpacked, zeros), dim=0)  # (valid_len, 1, d_out) -> (batch, 1, d_out)
-                x = self.dropout(unpacked[unperm_indices])
-                hs = tuple([torch.cat((h, old_h), dim=1) for h, old_h in zip(hs, old_hs)])
-        return x, hs
+            if valid_len < batch:
+                n_dec_lay, _, d_dec_hidden = hs[0].size()
+                pad = unpacked.new_zeros(batch - valid_len, 1, d_dec_hidden)
+                # (valid_len, 1, n_dir * d_d_hid) -> (b, 1, n_dir * d_d_hid)
+                unpacked = torch.cat((unpacked, pad), dim=0)
+                new_hs = tuple([torch.cat((nh, oh), dim=1) for nh, oh in zip(new_hs, old_hs)])
+
+            unpacked = unpacked.index_select(0, unperm_indices)
+            new_hs = tuple([new_h.index_select(1, unperm_indices) for new_h in new_hs])
+        # all words are PAD or EOS
+        else:
+            _, batch, d_dec_hidden = hs[0].size()
+            unpacked = target_word.new_zeros(batch, 1, d_dec_hidden)
+            new_hs = hs
+        # (b, 1, n_dir * d_d_hid), ((n_d_lay * n_dir, b, d_hid), (n_d_lay * n_dir, b, d_hid))
+        return unpacked, new_hs

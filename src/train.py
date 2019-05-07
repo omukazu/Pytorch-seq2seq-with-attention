@@ -22,10 +22,11 @@ def main():
 
     os.makedirs(os.path.dirname(config['arguments']['save_path']), exist_ok=True)
 
-    id_to_word, model, device, train_data_loader, valid_data_loader, optimizer = load_setting(config, args)
+    s_id_to_word, t_id_to_word, model, device, train_data_loader, valid_data_loader, optimizer = \
+        load_setting(config, args)
 
     best_acc = 0
-    place_holder = CrossEntropyLoss(ignore_index=-1, reduction='sum')
+    place_holder = CrossEntropyLoss(reduction='sum')
 
     for epoch in range(1, config['arguments']['epoch'] + 1):
         print(f'*** epoch {epoch} ***')
@@ -35,9 +36,9 @@ def main():
         for batch_idx, (source, mask_xs, targets, mask_ys) in tqdm(enumerate(train_data_loader)):
             source = source.to(device)
             mask_xs = mask_xs.to(device)
-            target = targets[0].to(device)
-            truth = (targets[1] - 1).to(device)
-            mask_ys = mask_ys.to(device)
+            # target = targets[0].to(device)
+            # truth = targets[1].to(device)
+            # mask_ys = mask_ys.to(device)
 
             # Forward pass
             output = model(source, mask_xs, target, mask_ys)
@@ -49,6 +50,13 @@ def main():
             optimizer.step()
 
             total_loss += loss.item()
+        else:
+            predict = model.predict(source, mask_xs)  # (batch, max_seq_len)
+            # s_translation = translate(source[:5], s_id_to_word)
+            # t_translation = translate(targets[1][:5], t_id_to_word)
+            p_translation = translate(predict[:5], t_id_to_word)
+            for p in p_translation:
+                print(' '.join(p))
         print(f'train_loss={total_loss / train_data_loader.n_samples:.6f}', end=' ')
 
         # validation
@@ -60,15 +68,12 @@ def main():
                 source = source.to(device)
                 mask_xs = mask_xs.to(device)
                 target = targets[0].to(device)
-                truth = (targets[1] - 1).to(device)
+                truth = targets[1].to(device)
                 mask_ys = mask_ys.to(device)
 
                 output = model(source, mask_xs, target, mask_ys)
-                predict = model.predict(source, mask_xs)  # (batch, max_seq_len)
-                s_translation = translate(source[:5], id_to_word)
-                t_translation = translate(predict[:5], id_to_word)
-                for s, t in zip(s_translation, t_translation):
-                    print(f'source:{" ".join(s)} / target:{" ".join(t)}')
+                # for s, t, p in zip(s_translation, t_translation, p_translation):
+                #     print(f'source:{" ".join(s)} / target:{" ".join(t)} / predict:{" ".join(p)}')
 
                 total_loss += calculate_loss(output, truth, place_holder)
                 # num_iter = batch_idx + 1
