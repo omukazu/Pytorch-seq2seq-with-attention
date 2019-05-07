@@ -9,17 +9,21 @@ import torch.nn.functional as F
 
 from data_loader import EPDataLoader
 from seq2seq import Seq2seq
-from constants import PAD, SOURCE_UNK, SOURCE_EOS, TARGET_UNK, TARGET_EOS
+from constants import SOURCE_PAD, SOURCE_UNK, SOURCE_EOS, TARGET_UNK, TARGET_EOS
 
 
-def calculate_loss(output: torch.Tensor,  # (batch, max_target_len, vocab_size)
-                   truth: torch.Tensor,   # (batch, max_target_len)
+def calculate_loss(output: torch.Tensor,        # (batch, max_target_len, vocab_size)
+                   target_mask: torch.Tensor,   # (batch, max_target_len)
+                   label: torch.Tensor,         # (batch, max_target_len)
                    loss_function: torch.nn.Module
                    ) -> torch.Tensor:
     batch, max_target_len, vocab_size = output.size()
-    prediction = F.softmax(output, dim=1).contiguous().view(-1, vocab_size)  # (batch * max_target_len, vocab_size)
-    truth = truth.view(-1)
-    loss = loss_function(prediction, truth)
+    label = label.masked_select(target_mask.eq(1))
+
+    prediction = F.softmax(output, dim=1)  # (batch, max_target_len, vocab_size)
+    prediction_mask = target_mask.unsqueeze(-1).expand(-1, -1, vocab_size)
+    prediction = prediction.masked_select(prediction_mask.eq(1)).contiguous().view(-1, vocab_size)
+    loss = loss_function(prediction, label)
     return loss
 
 
@@ -30,11 +34,11 @@ def load_vocabulary(source_path: str,
         s_lines = [line for line in source]
         t_lines = [line for line in target]
     s_word_to_id = {f'{key.strip()}': i + 3 for i, key in enumerate(s_lines)}
-    s_word_to_id['<PAD>'] = PAD
+    s_word_to_id['<PAD>'] = SOURCE_PAD
     s_word_to_id['<UNK>'] = SOURCE_UNK
     s_word_to_id['<EOS>'] = SOURCE_EOS
     s_id_to_word = {i + 3: f'{key.strip()}' for i, key in enumerate(s_lines)}
-    s_id_to_word[PAD] = '<PAD>'
+    s_id_to_word[SOURCE_PAD] = '<PAD>'
     s_id_to_word[SOURCE_UNK] = '<UNK>'
     s_id_to_word[SOURCE_EOS] = '<EOS>'
     t_word_to_id = {f'{key.strip()}': i + 2 for i, key in enumerate(t_lines)}
@@ -115,10 +119,18 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
 def load_tester(config: Dict[str, Dict[str, str or int]],
                 args  # argparse.Namespace
                 ):
+    path = 'debug' if args.debug else 'data'
+    s_word_to_id, s_id_to_word, t_word_to_id, t_id_to_word \
+        = load_vocabulary(config[path]['s_vocab'], config[path]['t_vocab'])
+    w2v = KeyedVectors.load_word2vec_format(config[path]['w2v'], binary=True, unicode_errors='ignore')
+    source_embeddings = ids_to_embeddings(s_word_to_id, w2v)
+    target_embeddings = ids_to_embeddings(t_word_to_id, w2v)
+
     # build model architecture first
     if config['arguments']['model_name'] == 'Seq2seq':
         model = Seq2seq(d_hidden=config['arguments']['d_hidden'],
-                        embeddings=None,
+                        source_embeddings=source_embeddings,
+                        target_embeddings=target_embeddings,
                         max_seq_len=config['arguments']['max_seq_len'])
     else:
         print(f'Unknown model name: {config["arguments"]["model_name"]}', file=sys.stderr)
@@ -142,19 +154,15 @@ def load_tester(config: Dict[str, Dict[str, str or int]],
 
     model.to(device)
 
-    # setup data_loader instances
-    path = 'debug' if args.debug else 'evpairs'
-    word_to_id, id_to_word = load_vocabulary(config[path]['vocabulary'])
-
-    test_data_loader = EPDataLoader(config[path]['test'], word_to_id, config['arguments']['max_seq_len'],
+    test_data_loader = EPDataLoader(config[path]['test'], s_word_to_id, config['arguments']['max_seq_len'],
                                     batch_size=config['arguments']['batch_size'], shuffle=True, num_workers=2)
 
     # build optimizer
-    return id_to_word, model, device, test_data_loader
+    return t_id_to_word, model, device, test_data_loader
 
 
 def translate(predictions: torch.Tensor,
               id_to_word: Dict[int, str]
               ) -> List[List[Any]]:
-    return [[id_to_word[int(p)] for p in prediction if int(p) not in {EOS, len(id_to_word)}]
+    return [[id_to_word[int(p)] for p in prediction if int(p) not in {SOURCE_UNK, SOURCE_EOS}]
             for prediction in predictions]

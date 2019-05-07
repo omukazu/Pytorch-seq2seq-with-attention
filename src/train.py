@@ -33,16 +33,16 @@ def main():
         # train
         model.train()
         total_loss = 0
-        for batch_idx, (source, mask_xs, targets, mask_ys) in tqdm(enumerate(train_data_loader)):
+        for batch_idx, (source, source_mask, targets, target_mask) in tqdm(enumerate(train_data_loader)):
             source = source.to(device)
-            mask_xs = mask_xs.to(device)
-            # target = targets[0].to(device)
-            # truth = targets[1].to(device)
-            # mask_ys = mask_ys.to(device)
+            source_mask = source_mask.to(device)
+            target = targets[0].to(device)
+            target_mask = target_mask.to(device)
+            label = targets[1].to(device)
 
             # Forward pass
-            output = model(source, mask_xs, target, mask_ys)
-            loss = calculate_loss(output, truth, place_holder)
+            output = model(source, source_mask, target, target_mask)
+            loss = calculate_loss(output, target_mask, label, place_holder)
 
             # Backward and optimize
             optimizer.zero_grad()
@@ -51,7 +51,7 @@ def main():
 
             total_loss += loss.item()
         else:
-            predict = model.predict(source, mask_xs)  # (batch, max_seq_len)
+            predict = model.predict(source, source_mask)  # (batch, max_seq_len)
             # s_translation = translate(source[:5], s_id_to_word)
             # t_translation = translate(targets[1][:5], t_id_to_word)
             p_translation = translate(predict[:5], t_id_to_word)
@@ -64,18 +64,18 @@ def main():
         with torch.no_grad():
             total_loss = 0
             # num_iter = 0
-            for batch_idx, (source, mask_xs, targets, mask_ys) in tqdm(enumerate(valid_data_loader)):
+            for batch_idx, (source, source_mask, targets, target_mask) in tqdm(enumerate(valid_data_loader)):
                 source = source.to(device)
-                mask_xs = mask_xs.to(device)
+                source_mask = source_mask.to(device)
                 target = targets[0].to(device)
-                truth = targets[1].to(device)
-                mask_ys = mask_ys.to(device)
+                target_mask = target_mask.to(device)
+                label = targets[1].to(device)
 
-                output = model(source, mask_xs, target, mask_ys)
+                output = model(source, source_mask, target, target_mask)
                 # for s, t, p in zip(s_translation, t_translation, p_translation):
                 #     print(f'source:{" ".join(s)} / target:{" ".join(t)} / predict:{" ".join(p)}')
 
-                total_loss += calculate_loss(output, truth, place_holder)
+                total_loss += calculate_loss(output, target_mask, label, place_holder)
                 # num_iter = batch_idx + 1
         print(f'valid_loss={total_loss / valid_data_loader.n_samples:.6f}', end=' ')
         # if valid_acc > best_acc:

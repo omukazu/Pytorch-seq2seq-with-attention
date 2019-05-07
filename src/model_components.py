@@ -5,13 +5,33 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
+class TargetEmbedder(nn.Module):
+    def __init__(self,
+                 target_embeddings: torch.Tensor):
+        super(TargetEmbedder, self).__init__()
+        self.target_embed = nn.Embedding.from_pretrained(embeddings=target_embeddings, freeze=False)
+        self.d_t_emb = target_embeddings.size(1)
+
+    def forward(self,
+                target: torch.Tensor,       # (batch, max_target_len)
+                target_mask: torch.Tensor,  # (batch, max_target_len)
+                predict: bool
+                ) -> torch.Tensor:
+        target = target * target_mask
+        target_embedded = self.target_embed(target)
+        size = (-1, self.d_t_emb) if predict else (-1, -1, self.d_t_emb)
+        target_mask = target_mask.unsqueeze(-1).expand(size).type(target_embedded.dtype)
+        target_embedded = target_embedded * target_mask  # TARGET_PAD -> zero vector
+        return target_embedded                           # (batch, max_target_len, d_t_emb)
+
+
 class Encoder(nn.Module):
     def __init__(self,
                  rnn: nn.Module,
                  dropout_rate: float = 0.333):
         super(Encoder, self).__init__()
         self.rnn = rnn
-        self.dropout = nn.Dropout(p=dropout_rate)
+        # self.dropout = nn.Dropout(p=dropout_rate)
 
     def forward(self,
                 source: torch.Tensor,       # (batch, max_source_len, d_emb)

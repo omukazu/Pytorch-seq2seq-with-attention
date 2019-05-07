@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from constants import TARGET_EOS
-from model_components import Encoder, Decoder
+from model_components import Encoder, Decoder, TargetEmbedder
 
 
 class Seq2seq(nn.Module):
@@ -27,17 +27,17 @@ class Seq2seq(nn.Module):
         self.vocab_size = target_embeddings.size(0)
 
         self.source_embed = nn.Embedding.from_pretrained(embeddings=source_embeddings, freeze=False)
-        self.target_embed = nn.Embedding.from_pretrained(embeddings=target_embeddings, freeze=False)
+        self.target_embed = TargetEmbedder(target_embeddings)
 
         self.d_dec_hidden = d_hidden
         self.n_enc_layer = n_layer
         self.n_direction = 2 if bi_directional else 1
         self.n_dec_layer = 1
 
-        self.encoder = Encoder(nn.LSTM(input_size=self.d_emb, hidden_size=d_hidden,
+        self.encoder = Encoder(nn.LSTM(input_size=self.d_s_emb, hidden_size=d_hidden,
                                        num_layers=self.n_enc_layer, batch_first=True,
                                        dropout=dropout_rate, bidirectional=bi_directional))
-        self.decoder = Decoder(nn.LSTM(input_size=self.d_emb, hidden_size=self.d_dec_hidden,
+        self.decoder = Decoder(nn.LSTM(input_size=self.d_t_emb, hidden_size=self.d_dec_hidden,
                                        num_layers=self.n_dec_layer, batch_first=True,
                                        dropout=dropout_rate, bidirectional=False))
         self.w = nn.Linear(self.d_dec_hidden, self.vocab_size)
@@ -45,7 +45,7 @@ class Seq2seq(nn.Module):
     def forward(self,
                 source: torch.Tensor,       # (batch, max_source_len, d_emb)
                 source_mask: torch.Tensor,  # (batch, max_source_len)
-                target: torch.Tensor,       # (batch, max_target_len, d_emb)
+                target: torch.Tensor,       # (batch, max_target_len, 1), word_ids
                 target_mask: torch.Tensor   # (batch, max_target_len)
                 ) -> torch.Tensor:          # (batch, max_target_len, d_emb)
         batch_size = source.size(0)
@@ -57,7 +57,8 @@ class Seq2seq(nn.Module):
 
         max_target_len = target.size(1)
         output = source_embedded.new_zeros(batch_size, max_target_len, self.vocab_size)
-        target_embedded = self.target_embed(target).transpose(0, 1).unsqueeze(2)  # (max_target_len, batch, 1, d_emb)
+        target_embedded = self.target_embed(target, target_mask, False)  # (batch, max_target_len, d_emb)
+        target_embedded = target_embedded.transpose(0, 1).unsqueeze(2)   # (max_target_len, batch, 1, d_emb)
         for i in range(max_target_len):
             if self.attention:
                 pass  # TODO: calculate attention
@@ -77,19 +78,17 @@ class Seq2seq(nn.Module):
             h = (self.transform(batch_size, h[0]),
                  self.transform(batch_size, h[1].new_zeros(h[1].size())))
 
-            tensor_type = 'torch.cuda.LongTensor' if source.device.index is not None else 'torch.LongTensor'
-            target_id = torch.full((batch_size, 1), EOS).type(tensor_type).to(source.device)
-            mask_type = 'torch.cuda.ByteTensor' if source.device.index is not None else 'torch.ByteTensor'
-            target_mask = torch.full([batch_size], 1).type(mask_type).to(source.device)
+            target_id = torch.full((batch_size, 1), TARGET_EOS, dtype=source.dtype).to(source.device)
+            target_mask = torch.full([batch_size], 1, dtype=source_mask.dtype).to(source_mask.device)
             output = source_embedded.new_zeros(batch_size, self.max_seq_len, 1)
             for i in range(self.max_seq_len):
                 if self.attention:
                     pass
-                target_embedded = self.target_embed(target_id)
+                target_embedded = self.target_embed(target_id, target_mask, True)
                 dec_out, h = self.decoder(target_embedded, target_mask, h)
                 outs = self.w(dec_out.squeeze(1))
                 prediction = torch.argmax(F.softmax(outs, dim=1), dim=1)  # (batch), greedy
-                target_mask = target_mask * prediction.ne(EOS)
+                target_mask = target_mask * prediction.ne(TARGET_EOS).type(target_mask.dtype)
                 target_id = prediction.unsqueeze(1)
                 output[:, i, :] = prediction.unsqueeze(1)
         return output

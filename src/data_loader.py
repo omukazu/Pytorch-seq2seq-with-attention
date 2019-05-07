@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
-from constants import PAD, SOURCE_EOS, TARGET_EOS
+from constants import SOURCE_PAD, TARGET_PAD, TARGET_EOS
 
 
 class EPDataset(Dataset):
@@ -24,15 +24,16 @@ class EPDataset(Dataset):
 
     def __getitem__(self,
                     idx
-                    ) -> Tuple[np.ndarray, np.ndarray, Tuple[List[int], List[int]], np.ndarray]:
+                    ) -> Tuple[np.ndarray, np.ndarray, Tuple[np.ndarray, np.ndarray], np.ndarray]:
         source_len = len(self.sources[idx])
-        source_pad: List[int] = [PAD] * (self.max_source_len - source_len)
+        source_pad: List[int] = [SOURCE_PAD] * (self.max_source_len - source_len)
         source = np.array(self.sources[idx] + source_pad)
         source_mask = np.array([1] * source_len + [0] * (self.max_source_len - source_len))
 
         target_len = len(self.targets[idx][0])
-        target_inp = self.targets[idx][0]
-        target_out = self.targets[idx][1]
+        target_pad: List[int] = [TARGET_PAD] * (self.max_target_len - target_len)
+        target_inp = np.array(self.targets[idx][0] + target_pad)
+        target_out = np.array(self.targets[idx][1] + target_pad)
         targets = (target_inp, target_out)
         target_mask = np.array([1] * target_len + [0] * (self.max_target_len - target_len))
         return source, source_mask, targets, target_mask
