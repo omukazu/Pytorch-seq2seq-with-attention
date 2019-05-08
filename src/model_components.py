@@ -47,8 +47,9 @@ class Encoder(nn.Module):
         output, h = self.rnn(packed, None)  # (sum(lengths), hid*2)
         unpacked, _ = pad_packed_sequence(output, batch_first=True, padding_value=0)
         restored = unpacked.index_select(0, unperm_indices)
+        h = [state.index_select(1, unperm_indices) for state in h]
         # (batch, max_source_len, d_enc_hidden * n_direction), (n_layer * n_direction, batch, d_enc_hidden)
-        return restored, list(h)
+        return restored, h
 
 
 class Decoder(nn.Module):
@@ -78,7 +79,7 @@ class Decoder(nn.Module):
             old_hs = [h.index_select(1, perm_indices)[:, valid_len:, :].contiguous() for h in hs]
             new_hs = [h.index_select(1, perm_indices)[:, :valid_len, :].contiguous() for h in hs]
             output, new_hs = self.rnn(packed, new_hs)
-            unpacked, _ = pad_packed_sequence(output, batch_first=True)  # (b, 1, d_d_hid * 1)
+            unpacked, _ = pad_packed_sequence(output, batch_first=True)  # (valid_len, 1, d_d_hid * 1)
 
             if valid_len < batch:
                 n_dec_lay, _, d_dec_hidden = hs[0].size()
@@ -92,7 +93,7 @@ class Decoder(nn.Module):
         # all words are PAD or EOS
         else:
             _, batch, d_dec_hidden = hs[0].size()
-            unpacked = target_word.new_zeros(batch, 1, d_dec_hidden)
+            unpacked = hs[0].transpose(0, 1)
             new_hs = hs
         # (b, 1, n_dir * d_d_hid), ((n_d_lay * n_dir, b, d_hid), (n_d_lay * n_dir, b, d_hid))
         return unpacked, new_hs
