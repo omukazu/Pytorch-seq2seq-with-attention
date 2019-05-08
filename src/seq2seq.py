@@ -87,7 +87,7 @@ class Seq2seq(nn.Module):
                 target_embedded = self.target_embed(target_id, target_mask, True)
                 dec_out, h = self.decoder(target_embedded, target_mask, h)
                 outs = self.w(dec_out.squeeze(1))
-                prediction = torch.argmax(F.softmax(outs, dim=1), dim=1)  # (batch), greedy
+                prediction = torch.argmax(F.softmax(outs, dim=1), dim=1)                # (batch), greedy
                 target_mask = target_mask * prediction.ne(EOS).type(target_mask.dtype)
                 target_id = prediction.unsqueeze(1)
                 output[:, i, :] = prediction.unsqueeze(1)
@@ -100,7 +100,7 @@ class Seq2seq(nn.Module):
         h = h.contiguous().view(self.n_enc_layer, self.n_direction, batch_size, -1)
         if self.bi_directional:
             h = h[:, 0, :, :] + h[:, 1, :, :]
-        h = h.squeeze(1)                                           # (n_enc_layer, batch, d_enc_hidden)
+        h = h.squeeze(1)          # (n_enc_layer, batch, d_enc_hidden)
         # hidden[: n_layer] <- extract n-last hidden layer
-        h = h[:self.n_dec_layer]                                   # (n_dec_layer * 1, batch, d_hidden)
+        h = h[:self.n_dec_layer]  # (n_dec_layer * 1, batch, d_hidden)
         return h

@@ -52,8 +52,8 @@ def main():
             total_loss += loss.item()
         else:
             predict = model.predict(source, source_mask)  # (batch, max_seq_len)
-            # s_translation = translate(source[:5], s_id_to_word)
-            # t_translation = translate(targets[1][:5], t_id_to_word)
+            s_translation = translate(source[:5], s_id_to_word)
+            t_translation = translate(targets[1][:5], t_id_to_word)
             p_translation = translate(predict[:5], t_id_to_word)
             for p in p_translation:
                 print(' '.join(p))

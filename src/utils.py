@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from data_loader import EPDataLoader
 from seq2seq import Seq2seq
-from constants import BOS, EOS, UNK
+from constants import PAD, BOS, EOS, UNK
 
 
 def calculate_loss(output: torch.Tensor,        # (batch, max_target_len, vocab_size)
@@ -41,7 +41,7 @@ def load_vocabulary(source_path: str,
     t_word_to_id['<UNK>'] = UNK
     t_word_to_id['<BOS>'] = BOS
     t_word_to_id['<EOS>'] = EOS
-    t_id_to_word = {i + 2: f'{key.strip()}' for i, key in enumerate(t_lines)}
+    t_id_to_word = {i + 3: f'{key.strip()}' for i, key in enumerate(t_lines)}
     t_id_to_word[UNK] = '<UNK>'
     t_id_to_word[BOS] = '<BOS>'
     t_id_to_word[EOS] = '<EOS>'
@@ -51,7 +51,7 @@ def load_vocabulary(source_path: str,
 def ids_to_embeddings(word_to_id: Dict[str, int],
                       w2v: KeyedVectors
                       ) -> torch.Tensor:
-    embeddings = numpy.zeros((len(word_to_id) + 1, w2v.vector_size), 'f')  # (vocab_size + 1, d_emb)
+    embeddings = numpy.zeros((len(word_to_id), w2v.vector_size), 'f')  # (vocab_size, d_emb)
     unk_indices = []
     for w, i in word_to_id.items():
         if w in w2v.vocab:
@@ -158,5 +158,5 @@ def load_tester(config: Dict[str, Dict[str, str or int]],
 def translate(predictions: torch.Tensor,
               id_to_word: Dict[int, str]
               ) -> List[List[Any]]:
-    return [[id_to_word[int(p)] for p in prediction if int(p) not in {BOS, EOS}]
+    return [[id_to_word[int(p)] for p in prediction if int(p) not in {PAD, BOS, EOS}]
             for prediction in predictions]

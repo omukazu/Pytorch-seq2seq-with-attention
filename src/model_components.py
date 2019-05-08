@@ -23,7 +23,7 @@ class Embedder(nn.Module):
         size = (-1, self.d_emb) if predict else (-1, -1, self.d_emb)
         mask = mask.unsqueeze(-1).expand(size).type(embedded.dtype)
         embedded = embedded * mask  # TARGET_PAD -> zero vector
-        return embedded                           # (batch, max_target_len, d_t_emb)
+        return embedded             # (batch, max_target_len, d_t_emb)
 
 
 class Encoder(nn.Module):
@@ -32,7 +32,7 @@ class Encoder(nn.Module):
                  dropout_rate: float = 0.333):
         super(Encoder, self).__init__()
         self.rnn = rnn
-        # self.dropout = nn.Dropout(p=dropout_rate)
+        self.dropout = nn.Dropout(p=dropout_rate)
 
     def forward(self,
                 source: torch.Tensor,       # (batch, max_source_len, d_emb)
