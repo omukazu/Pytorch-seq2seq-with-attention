@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from constants import TARGET_EOS
-from model_components import Encoder, Decoder, TargetEmbedder
+from constants import EOS
+from model_components import Encoder, Decoder, Embedder
 
 
 class Seq2seq(nn.Module):
@@ -26,8 +26,8 @@ class Seq2seq(nn.Module):
         self.max_seq_len = max_seq_len
         self.vocab_size = target_embeddings.size(0)
 
-        self.source_embed = nn.Embedding.from_pretrained(embeddings=source_embeddings, freeze=False)
-        self.target_embed = TargetEmbedder(target_embeddings)
+        self.source_embed = Embedder(source_embeddings)
+        self.target_embed = Embedder(target_embeddings)
 
         self.d_dec_hidden = d_hidden
         self.n_enc_layer = n_layer
@@ -49,7 +49,7 @@ class Seq2seq(nn.Module):
                 target_mask: torch.Tensor   # (batch, max_target_len)
                 ) -> torch.Tensor:          # (batch, max_target_len, d_emb)
         batch_size = source.size(0)
-        source_embedded = self.source_embed(source)  # (batch, max_source_len, d_emb)
+        source_embedded = self.source_embed(source, source_mask, False)  # (batch, max_source_len, d_emb)
         enc_out, h = self.encoder(source_embedded, source_mask)
         # (n_enc_layer * bi_direction, batch, d_hidden) -> (n_dec_layer, batch, d_hidden)
         h = (self.transform(batch_size, h[0]),
@@ -67,18 +67,18 @@ class Seq2seq(nn.Module):
         return output
 
     def predict(self,
-                source: torch.Tensor,  # (batch, max_seq_len, d_emb)
+                source: torch.Tensor,       # (batch, max_seq_len, d_emb)
                 source_mask: torch.Tensor,  # (batch, max_seq_len)
-                ) -> torch.Tensor:  # (batch, seq_len)
+                ) -> torch.Tensor:          # (batch, seq_len)
         self.eval()
         with torch.no_grad():
             batch_size = source.size(0)
-            source_embedded = self.source_embed(source)  # (batch, max_seq_len, d_emb)
+            source_embedded = self.source_embed(source, source_mask, False)  # (batch, max_seq_len, d_emb)
             enc_out, h = self.encoder(source_embedded, source_mask)
             h = (self.transform(batch_size, h[0]),
                  self.transform(batch_size, h[1].new_zeros(h[1].size())))
 
-            target_id = torch.full((batch_size, 1), TARGET_EOS, dtype=source.dtype).to(source.device)
+            target_id = torch.full((batch_size, 1), EOS, dtype=source.dtype).to(source.device)
             target_mask = torch.full([batch_size], 1, dtype=source_mask.dtype).to(source_mask.device)
             output = source_embedded.new_zeros(batch_size, self.max_seq_len, 1)
             for i in range(self.max_seq_len):
@@ -88,7 +88,7 @@ class Seq2seq(nn.Module):
                 dec_out, h = self.decoder(target_embedded, target_mask, h)
                 outs = self.w(dec_out.squeeze(1))
                 prediction = torch.argmax(F.softmax(outs, dim=1), dim=1)  # (batch), greedy
-                target_mask = target_mask * prediction.ne(TARGET_EOS).type(target_mask.dtype)
+                target_mask = target_mask * prediction.ne(EOS).type(target_mask.dtype)
                 target_id = prediction.unsqueeze(1)
                 output[:, i, :] = prediction.unsqueeze(1)
         return output

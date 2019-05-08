@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from data_loader import EPDataLoader
 from seq2seq import Seq2seq
-from constants import SOURCE_PAD, SOURCE_UNK, SOURCE_EOS, TARGET_UNK, TARGET_EOS
+from constants import BOS, EOS, UNK
 
 
 def calculate_loss(output: torch.Tensor,        # (batch, max_target_len, vocab_size)
@@ -33,20 +33,18 @@ def load_vocabulary(source_path: str,
     with open(source_path, "r") as source, open(target_path, "r") as target:
         s_lines = [line for line in source]
         t_lines = [line for line in target]
-    s_word_to_id = {f'{key.strip()}': i + 3 for i, key in enumerate(s_lines)}
-    s_word_to_id['<PAD>'] = SOURCE_PAD
-    s_word_to_id['<UNK>'] = SOURCE_UNK
-    s_word_to_id['<EOS>'] = SOURCE_EOS
-    s_id_to_word = {i + 3: f'{key.strip()}' for i, key in enumerate(s_lines)}
-    s_id_to_word[SOURCE_PAD] = '<PAD>'
-    s_id_to_word[SOURCE_UNK] = '<UNK>'
-    s_id_to_word[SOURCE_EOS] = '<EOS>'
-    t_word_to_id = {f'{key.strip()}': i + 2 for i, key in enumerate(t_lines)}
-    t_word_to_id['<UNK>'] = TARGET_UNK
-    t_word_to_id['<EOS>'] = TARGET_EOS
+    s_word_to_id = {f'{key.strip()}': i + 1 for i, key in enumerate(s_lines)}
+    s_word_to_id['<UNK>'] = UNK
+    s_id_to_word = {i + 1: f'{key.strip()}' for i, key in enumerate(s_lines)}
+    s_id_to_word[UNK] = '<UNK>'
+    t_word_to_id = {f'{key.strip()}': i + 3 for i, key in enumerate(t_lines)}
+    t_word_to_id['<UNK>'] = UNK
+    t_word_to_id['<BOS>'] = BOS
+    t_word_to_id['<EOS>'] = EOS
     t_id_to_word = {i + 2: f'{key.strip()}' for i, key in enumerate(t_lines)}
-    t_id_to_word[TARGET_UNK] = '<UNK>'
-    t_id_to_word[TARGET_EOS] = '<EOS>'
+    t_id_to_word[UNK] = '<UNK>'
+    t_id_to_word[BOS] = '<BOS>'
+    t_id_to_word[EOS] = '<EOS>'
     return s_word_to_id, s_id_to_word, t_word_to_id, t_id_to_word
 
 
@@ -56,9 +54,7 @@ def ids_to_embeddings(word_to_id: Dict[str, int],
     embeddings = numpy.zeros((len(word_to_id) + 1, w2v.vector_size), 'f')  # (vocab_size + 1, d_emb)
     unk_indices = []
     for w, i in word_to_id.items():
-        if w == '<PAD>':
-            pass  # zero vector
-        elif w in w2v.vocab:
+        if w in w2v.vocab:
             embeddings[i] = w2v.word_vec(w)
         else:
             unk_indices.append(i)
@@ -103,11 +99,9 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
     model.to(device)
 
     # setup data_loader instances
-    train_data_loader = EPDataLoader(config[path]['train'], config['arguments']['max_seq_len'],
-                                     s_word_to_id, t_word_to_id,
+    train_data_loader = EPDataLoader(config[path]['train'], s_word_to_id, t_word_to_id,
                                      batch_size=config['arguments']['batch_size'], shuffle=True, num_workers=2)
-    valid_data_loader = EPDataLoader(config[path]['valid'], config['arguments']['max_seq_len'],
-                                     s_word_to_id, t_word_to_id,
+    valid_data_loader = EPDataLoader(config[path]['valid'], s_word_to_id, t_word_to_id,
                                      batch_size=config['arguments']['batch_size'], shuffle=False, num_workers=2)
 
     # build optimizer
@@ -164,5 +158,5 @@ def load_tester(config: Dict[str, Dict[str, str or int]],
 def translate(predictions: torch.Tensor,
               id_to_word: Dict[int, str]
               ) -> List[List[Any]]:
-    return [[id_to_word[int(p)] for p in prediction if int(p) not in {SOURCE_UNK, SOURCE_EOS}]
+    return [[id_to_word[int(p)] for p in prediction if int(p) not in {BOS, EOS}]
             for prediction in predictions]

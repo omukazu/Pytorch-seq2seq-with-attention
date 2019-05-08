@@ -5,24 +5,25 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
-class TargetEmbedder(nn.Module):
+class Embedder(nn.Module):
     def __init__(self,
-                 target_embeddings: torch.Tensor):
-        super(TargetEmbedder, self).__init__()
-        self.target_embed = nn.Embedding.from_pretrained(embeddings=target_embeddings, freeze=False)
-        self.d_t_emb = target_embeddings.size(1)
+                 embeddings: torch.Tensor,
+                 freeze: bool = False):
+        super(Embedder, self).__init__()
+        self.embed = nn.Embedding.from_pretrained(embeddings=embeddings, freeze=freeze)
+        self.d_emb = embeddings.size(1)
 
     def forward(self,
-                target: torch.Tensor,       # (batch, max_target_len)
-                target_mask: torch.Tensor,  # (batch, max_target_len)
+                x: torch.Tensor,     # (batch, max_target_len)
+                mask: torch.Tensor,  # (batch, max_target_len)
                 predict: bool
                 ) -> torch.Tensor:
-        target = target * target_mask
-        target_embedded = self.target_embed(target)
-        size = (-1, self.d_t_emb) if predict else (-1, -1, self.d_t_emb)
-        target_mask = target_mask.unsqueeze(-1).expand(size).type(target_embedded.dtype)
-        target_embedded = target_embedded * target_mask  # TARGET_PAD -> zero vector
-        return target_embedded                           # (batch, max_target_len, d_t_emb)
+        x = x * mask
+        embedded = self.embed(x)
+        size = (-1, self.d_emb) if predict else (-1, -1, self.d_emb)
+        mask = mask.unsqueeze(-1).expand(size).type(embedded.dtype)
+        embedded = embedded * mask  # TARGET_PAD -> zero vector
+        return embedded                           # (batch, max_target_len, d_t_emb)
 
 
 class Encoder(nn.Module):
