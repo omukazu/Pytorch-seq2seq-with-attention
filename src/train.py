@@ -3,9 +3,8 @@ import os
 from argparse import ArgumentParser
 from argparse import RawTextHelpFormatter
 
+from numpy.random import randint
 import torch
-from torch.nn import CrossEntropyLoss
-from tqdm import tqdm
 
 from utils import calculate_loss, load_setting, translate
 
@@ -26,7 +25,6 @@ def main():
         load_setting(config, args)
 
     best_acc = 0
-    place_holder = CrossEntropyLoss(reduction='none')
 
     for epoch in range(1, config['arguments']['epoch'] + 1):
         print(f'*** epoch {epoch} ***')
@@ -34,7 +32,7 @@ def main():
         model.train()
         total_loss = 0
         for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
-                in tqdm(enumerate(train_data_loader)):
+                in enumerate(train_data_loader):
             source = source.to(device)
             source_mask = source_mask.to(device)
             target = target_inputs.to(device)
@@ -43,7 +41,7 @@ def main():
 
             # Forward pass
             output = model(source, source_mask, target, target_mask)
-            loss = calculate_loss(output, target_mask, label, place_holder)
+            loss = calculate_loss(output, target_mask, label)
 
             # Backward and optimize
             optimizer.zero_grad()
@@ -53,10 +51,11 @@ def main():
             total_loss += loss.item()
         else:
             predict = model.predict(source, source_mask)  # (batch, max_seq_len)
-            p_translation = translate(predict[:5], target_id_to_word)
+            random_indices = randint(0, len(predict), 10)
+            p_translation = translate(predict[random_indices], target_id_to_word)
             for p in p_translation:
                 print(' '.join(p))
-        print(f'train_loss={total_loss / train_data_loader.n_samples:.6f}', end=' ')
+            print(f'train_loss={total_loss / (batch_idx + 1):.3f}', end=' ')
 
         # validation
         model.eval()
@@ -64,7 +63,7 @@ def main():
             total_loss = 0
             # num_iter = 0
             for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
-                    in tqdm(enumerate(valid_data_loader)):
+                    in enumerate(valid_data_loader):
                 source = source.to(device)
                 source_mask = source_mask.to(device)
                 target = target_inputs.to(device)
@@ -75,9 +74,10 @@ def main():
                 # for s, t, p in zip(s_translation, t_translation, p_translation):
                 #     print(f'source:{" ".join(s)} / target:{" ".join(t)} / predict:{" ".join(p)}')
 
-                total_loss += calculate_loss(output, target_mask, label, place_holder)
+                total_loss += calculate_loss(output, target_mask, label)
                 # num_iter = batch_idx + 1
-        print(f'valid_loss={total_loss / valid_data_loader.n_samples:.6f}', end=' ')
+            else:
+                print(f'valid_loss={total_loss / (batch_idx + 1):.3f}', end=' ')
         # if valid_acc > best_acc:
     torch.save(model.state_dict(),
                os.path.join(config['arguments']['save_path'], f'sample.pth'))
