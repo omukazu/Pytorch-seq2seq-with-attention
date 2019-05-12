@@ -22,23 +22,24 @@ def main():
 
     os.makedirs(os.path.dirname(config['arguments']['save_path']), exist_ok=True)
 
-    s_id_to_word, t_id_to_word, model, device, train_data_loader, valid_data_loader, optimizer = \
+    source_id_to_word, target_id_to_word, model, device, train_data_loader, valid_data_loader, optimizer = \
         load_setting(config, args)
 
     best_acc = 0
-    place_holder = CrossEntropyLoss(reduction='mean')
+    place_holder = CrossEntropyLoss(reduction='sum')
 
     for epoch in range(1, config['arguments']['epoch'] + 1):
         print(f'*** epoch {epoch} ***')
         # train
         model.train()
         total_loss = 0
-        for batch_idx, (source, source_mask, targets, target_mask) in tqdm(enumerate(train_data_loader)):
+        for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
+                in tqdm(enumerate(train_data_loader)):
             source = source.to(device)
             source_mask = source_mask.to(device)
-            target = targets[0].to(device)
+            target = target_inputs.to(device)
             target_mask = target_mask.to(device)
-            label = targets[1].to(device)
+            label = target_outputs.to(device)
 
             # Forward pass
             output = model(source, source_mask, target, target_mask)
@@ -52,9 +53,7 @@ def main():
             total_loss += loss.item()
         else:
             predict = model.predict(source, source_mask)  # (batch, max_seq_len)
-            s_translation = translate(source[:5], s_id_to_word)
-            t_translation = translate(targets[1][:5], t_id_to_word)
-            p_translation = translate(predict[:5], t_id_to_word)
+            p_translation = translate(predict[:5], target_id_to_word)
             for p in p_translation:
                 print(' '.join(p))
         print(f'train_loss={total_loss / train_data_loader.n_samples:.6f}', end=' ')
@@ -64,12 +63,13 @@ def main():
         with torch.no_grad():
             total_loss = 0
             # num_iter = 0
-            for batch_idx, (source, source_mask, targets, target_mask) in tqdm(enumerate(valid_data_loader)):
+            for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
+                    in tqdm(enumerate(valid_data_loader)):
                 source = source.to(device)
                 source_mask = source_mask.to(device)
-                target = targets[0].to(device)
+                target = target_inputs.to(device)
                 target_mask = target_mask.to(device)
-                label = targets[1].to(device)
+                label = target_outputs.to(device)
 
                 output = model(source, source_mask, target, target_mask)
                 # for s, t, p in zip(s_translation, t_translation, p_translation):
