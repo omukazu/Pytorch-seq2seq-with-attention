@@ -76,10 +76,10 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
     target_embeddings = ids_to_embeddings(target_word_to_id, w2v)
 
     if config['arguments']['model_name'] == 'Seq2seq':
-        model = Seq2seq(d_hid=config['arguments']['d_hidden'],
+        model = Seq2seq(d_e_hid=config['arguments']['d_hidden'],
+                        max_seq_len=config['arguments']['max_seq_len'],
                         source_embeddings=source_embeddings,
-                        target_embeddings=target_embeddings,
-                        max_seq_len=config['arguments']['max_seq_len'])
+                        target_embeddings=target_embeddings)
     else:
         print(f'Unknown model name: {config["arguments"]["model_name"]}', file=sys.stderr)
         return

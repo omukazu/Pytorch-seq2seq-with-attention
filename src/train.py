@@ -50,11 +50,6 @@ def main():
 
             total_loss += loss.item()
         else:
-            predict = model.predict(source, source_mask)  # (batch, max_seq_len)
-            random_indices = randint(0, len(predict), 10)
-            p_translation = translate(predict[random_indices], target_id_to_word)
-            for p in p_translation:
-                print(' '.join(p))
             print(f'train_loss={total_loss / (batch_idx + 1):.3f}', end=' ')
 
         # validation
@@ -77,6 +72,11 @@ def main():
                 total_loss += calculate_loss(output, target_mask, label)
                 # num_iter = batch_idx + 1
             else:
+                predict = model.predict(source, source_mask)  # (batch, max_seq_len)
+                random_indices = randint(0, len(predict), 10)
+                p_translation = translate(predict[random_indices], target_id_to_word)
+                for p in p_translation:
+                    print(' '.join(p))
                 print(f'valid_loss={total_loss / (batch_idx + 1):.3f}', end=' ')
         # if valid_acc > best_acc:
     torch.save(model.state_dict(),
