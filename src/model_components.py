@@ -16,13 +16,12 @@ class Embedder(nn.Module):
         self.embed = nn.Embedding(num_embeddings=vocab_size, embedding_dim=d_emb)
 
     def forward(self,
-                x: torch.Tensor,     # (b, max_len)
-                mask: torch.Tensor,  # (b, max_len)
-                predict: bool
+                x: torch.Tensor,    # (b, max_len)
+                mask: torch.Tensor  # (b, max_len)
                 ) -> torch.Tensor:
         x = x * mask
         embedded = self.embed(x)
-        size = (-1, self.d_emb) if predict else (-1, -1, self.d_emb)
+        size = (-1, -1, self.d_emb)
         mask = mask.unsqueeze(-1).expand(size).type(embedded.dtype)
         embedded = embedded * mask  # TARGET_PAD -> zero vector
         return embedded             # (b, max_len, d_t_emb)
@@ -71,9 +70,9 @@ class Decoder(nn.Module):
         # self.dropout = nn.Dropout(p=dropout_rate)
 
     def forward(self,
-                x: torch.Tensor,                           # (b, 1, d_emb)
+                x: torch.Tensor,                           # (b, d_emb)
                 mask: torch.Tensor,                        # (b, 1)
-                states: Tuple[torch.Tensor, torch.Tensor]  # ((n_d_lay * n_dir, b, d_hid), (n_d_lay * n_dir, b, d_hid))
+                states: Tuple[torch.Tensor, torch.Tensor]  # state: (b, d_hid * n_dir)
                 ) -> Tuple[torch.Tensor, Tuple[torch.Tensor]]:
         valid_len = mask.sum()
 
@@ -82,32 +81,27 @@ class Decoder(nn.Module):
             sorted_input = x.index_select(0, sorted_indices)
             _, unsorted_indices = sorted_indices.sort(0)
 
-            packed = pack_padded_sequence(sorted_input[:valid_len],
-                                          lengths=sorted_lengths[:valid_len], batch_first=True)
-            cache = [state.index_select(1, sorted_indices) for state in states]
-            old_states = [state[:, valid_len:, :].contiguous() for state in cache]
-            new_states = [state[:, :valid_len, :].contiguous() for state in cache]
-            output, new_states = self.rnn(packed, new_states)
-            unpacked, _ = pad_packed_sequence(output, batch_first=True)  # (valid_len, 1, d_d_hid * 1)
+            valid_input = sorted_input[:valid_len, :]
+            cache = [state.index_select(0, sorted_indices) for state in states]
+            old_states = [state[valid_len:, :].contiguous() for state in cache]
+            new_states = [state[:valid_len, :].contiguous() for state in cache]
+            new_states[0], new_states[1] = self.rnn(valid_input, new_states)  # state: (valid_len, d_hid * n_dir)
 
-            b = x.size(0)
+            b, d_d_hid = states[0].size()
 
             if valid_len < b:
-                n_dec_lay, _, d_d_hid = states[0].size()
-                pad = unpacked.new_zeros((b - valid_len, 1, d_d_hid))
-                # (valid_len, 1, n_dir * d_d_hid) -> (b, 1, n_dir * d_d_hid)
-                unpacked = torch.cat((unpacked, pad), dim=0)
-                new_states = tuple([torch.cat((ns, os), dim=1) for ns, os in zip(new_states, old_states)])
+                # (valid_len, d_d_hid * n_dir) -> (b, d_d_hid * n_dir)
+                new_states = tuple([torch.cat((ns, os), dim=0) for ns, os in zip(new_states, old_states)])
 
-            unsorted_output = unpacked.index_select(0, unsorted_indices)
-            unsorted_states = tuple([new_state.index_select(1, unsorted_indices) for new_state in new_states])
+            unsorted_states = tuple([new_state.index_select(0, unsorted_indices) for new_state in new_states])
+            unsorted_output = unsorted_states[0]
         # all words are PAD or EOS
         else:
-            _, b, d_d_hid = states[0].size()
-            unsorted_output = states[0].new_zeros((b, 1, d_d_hid))  # outputs from pad equal zero
-            unsorted_states = states                                                    # do not update hidden state
+            # do not update hidden state
+            unsorted_output = states[0]
+            unsorted_states = states
 
-        # (b, 1, n_dir * d_d_hid), ((n_d_lay * n_dir, b, d_hid), (n_d_lay * n_dir, b, d_hid))
+        # (b, d_d_hid), ((b, d_d_hid), (b, d_d_hid))
         return unsorted_output, unsorted_states
 
 

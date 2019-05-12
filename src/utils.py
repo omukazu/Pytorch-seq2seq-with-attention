@@ -23,7 +23,7 @@ def calculate_loss(output: torch.Tensor,        # (b, max_tar_len, vocab_size)
     prediction = F.softmax(output, dim=1)  # (b, max_tar_len, vocab_size)
     prediction_mask = target_mask.unsqueeze(-1).expand(-1, -1, vocab_size)
     prediction = prediction.masked_select(prediction_mask.eq(1)).contiguous().view(-1, vocab_size)
-    loss = loss_function(prediction, label)
+    loss = loss_function(prediction, label).sum() / batch
     return loss
 
 

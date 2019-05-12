@@ -26,7 +26,7 @@ def main():
         load_setting(config, args)
 
     best_acc = 0
-    place_holder = CrossEntropyLoss(reduction='sum')
+    place_holder = CrossEntropyLoss(reduction='none')
 
     for epoch in range(1, config['arguments']['epoch'] + 1):
         print(f'*** epoch {epoch} ***')
