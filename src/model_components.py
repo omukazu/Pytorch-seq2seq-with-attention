@@ -23,8 +23,8 @@ class Embedder(nn.Module):
         embedded = self.embed(x)
         size = (-1, -1, self.d_emb)
         mask = mask.unsqueeze(-1).expand(size).type(embedded.dtype)
-        embedded = embedded * mask  # TARGET_PAD -> zero vector
-        return embedded             # (b, max_len, d_t_emb)
+        embedded = embedded * mask  # PAD -> zero vector
+        return embedded             # (b, max_len, d_emb)
 
     def set_initial_embedding(self,
                               initial_weight: np.array,
@@ -33,6 +33,7 @@ class Embedder(nn.Module):
         self.embed.weight = nn.Parameter(torch.Tensor(initial_weight), requires_grad=(freeze is False))
 
 
+# for Generator
 class Encoder(nn.Module):
     def __init__(self,
                  rnn: nn.Module,
@@ -53,7 +54,7 @@ class Encoder(nn.Module):
 
         # masking
         packed = pack_padded_sequence(sorted_input, lengths=sorted_lengths, batch_first=True)
-        output, states = self.rnn(packed, None)  # (sum(lengths), hid*2)
+        output, states = self.rnn(packed, None)  # output: (sum(lengths), d_e_hid * n_dir)
         unpacked, _ = pad_packed_sequence(output, batch_first=True, padding_value=0)
         unsorted_output = unpacked.index_select(0, unsorted_indices)
         unsorted_states = [state.index_select(1, unsorted_indices) for state in states]
@@ -73,7 +74,7 @@ class Decoder(nn.Module):
     def forward(self,
                 x: torch.Tensor,                           # (b, d_emb)
                 mask: torch.Tensor,                        # (b, 1)
-                states: Tuple[torch.Tensor, torch.Tensor]  # state: (b, d_hid * n_dir)
+                states: Tuple[torch.Tensor, torch.Tensor]  # states[0]: (b, d_hid * n_dir)
                 ) -> Tuple[torch.Tensor, Tuple[torch.Tensor]]:
         valid_len = mask.sum()
 
@@ -83,14 +84,15 @@ class Decoder(nn.Module):
             _, unsorted_indices = sorted_indices.sort(0)
 
             valid_input = sorted_input[:valid_len, :]
-            cache = [state.index_select(0, sorted_indices) for state in states]
-            old_states = [state[valid_len:, :].contiguous() for state in cache]
-            new_states = [state[:valid_len, :].contiguous() for state in cache]
-            new_states[0], new_states[1] = self.rnn(valid_input, new_states)  # state: (valid_len, d_hid * n_dir)
+            if states is not None:
+                cache = [state.index_select(0, sorted_indices) for state in states]
+                old_states = [state[valid_len:, :].contiguous() for state in cache]
+                states = [state[:valid_len, :].contiguous() for state in cache]
+            new_states = self.rnn(valid_input, states)  # state: (valid_len, d_hid * n_dir)
 
-            b, d_d_hid = states[0].size()
+            b = x.size(0)
 
-            if valid_len < b:
+            if valid_len < b and states is not None:
                 # (valid_len, d_d_hid * n_dir) -> (b, d_d_hid * n_dir)
                 new_states = tuple([torch.cat((ns, os), dim=0) for ns, os in zip(new_states, old_states)])
 
@@ -106,8 +108,7 @@ class Decoder(nn.Module):
         return unsorted_output, unsorted_states
 
 
-class Maxout(nn.Module):
-
+class Maxout(nn.Module):  # concatenation and activation layer
     def __init__(self,
                  d_inp: int,
                  d_out: int,

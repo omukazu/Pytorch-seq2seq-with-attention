@@ -12,7 +12,7 @@ class Seq2seq(nn.Module):
                  max_seq_len: int,
                  source_embeddings: torch.Tensor,  # TODO: Optional embeddings
                  target_embeddings: torch.Tensor,
-                 attention: bool = False,
+                 attention: bool = True,
                  bi_directional: bool = True,
                  dropout_rate: float = 0.333,
                  freeze: bool = False,
@@ -38,41 +38,46 @@ class Seq2seq(nn.Module):
 
         self.attention = attention
         self.d_d_hid = d_e_hid * self.n_dir
-        self.n_d_lay = n_d_layer  # TODO: add support for multi-layer Decoder
+        self.n_d_lay = n_d_layer
         assert self.d_d_hid % self.n_dir == 0, 'invalid d_e_hid'
-        self.d_out = self.d_d_hid // self.n_dir
+        self.d_c_hid = self.d_d_hid if attention else 0
+        self.d_out = (self.d_d_hid + self.d_c_hid) // self.n_dir
         self.decoder = Decoder(nn.LSTMCell(input_size=self.d_t_emb, hidden_size=self.d_d_hid))
 
-        self.maxout = Maxout(self.d_d_hid, self.d_out, self.n_dir)
+        self.maxout = Maxout(self.d_d_hid + self.d_c_hid, self.d_out, self.n_dir)
         self.w = nn.Linear(self.d_out, self.target_vocab_size)
 
     def forward(self,
-                source: torch.Tensor,       # (b, max_sou_len)
-                source_mask: torch.Tensor,  # (b, max_sou_len)
-                target: torch.Tensor,       # (b, max_tar_len)
-                target_mask: torch.Tensor   # (b, max_tar_len)
-                ) -> torch.Tensor:          # (b, max_tar_len, d_emb)
+                source: torch.Tensor,       # (b, max_sou_seq_len)
+                source_mask: torch.Tensor,  # (b, max_sou_seq_len)
+                target: torch.Tensor,       # (b, max_tar_seq_len)
+                target_mask: torch.Tensor   # (b, max_tar_seq_len)
+                ) -> torch.Tensor:          # (b, max_tar_seq_len, d_emb)
         b = source.size(0)
-        source_embedded = self.source_embed(source, source_mask)  # (b, max_sou_len, d_s_emb)
+        source_embedded = self.source_embed(source, source_mask)  # (b, max_sou_seq_len, d_s_emb)
         e_out, states = self.encoder(source_embedded, source_mask)
-        # (n_e_lay * n_dir, b, d_hid) -> (b, d_hid * n_dir)
-        states = (self.transform(states[0]), self.transform(states[1].new_zeros(states[1].size())))
+        if self.attention:
+            states = None
+        else:
+            # (n_e_lay * n_dir, b, d_hid) -> (b, d_hid * n_dir), initialize cell state
+            states = (self.transform(states[0]), self.transform(states[1].new_zeros(states[1].size())))
 
-        max_tar_len = target.size(1)
-        output = source_embedded.new_zeros((b, max_tar_len, self.target_vocab_size))
-        target_embedded = self.target_embed(target, target_mask)  # (b, max_tar_len, d_t_emb)
-        target_embedded = target_embedded.transpose(1, 0)         # (max_tar_len, b, d_t_emb)
+        max_tar_seq_len = target.size(1)
+        output = source_embedded.new_zeros((b, max_tar_seq_len, self.target_vocab_size))
+        target_embedded = self.target_embed(target, target_mask)  # (b, max_tar_seq_len, d_t_emb)
+        target_embedded = target_embedded.transpose(1, 0)         # (max_tar_seq_len, b, d_t_emb)
         # decode per word
-        for i in range(max_tar_len):
-            if self.attention:
-                pass  # TODO: calculate attention
+        for i in range(max_tar_seq_len):
             d_out, states = self.decoder(target_embedded[i], target_mask[:, i], states)
-            output[:, i, :] = self.w(self.maxout(d_out))          # (b, d_d_hid) -> (b, d_out) -> (b, tar_vocab_size)
+            if self.attention:
+                context = calculate_context_vector(e_out, states[0], source_mask)  # (b, d_d_hid)
+                d_out = torch.cat((d_out, context), dim=-1)                        # (b, d_d_hid * 2)
+            output[:, i, :] = self.w(self.maxout(d_out))  # (b, d_d_hid) -> (b, d_out) -> (b, tar_vocab_size)
         return output
 
     def predict(self,
-                source: torch.Tensor,       # (b, max_sou_len)
-                source_mask: torch.Tensor,  # (b, max_sou_len)
+                source: torch.Tensor,       # (b, max_sou_seq_len)
+                source_mask: torch.Tensor,  # (b, max_sou_seq_len)
                 ) -> torch.Tensor:          # (b, max_seq_len)
         self.eval()
         with torch.no_grad():
@@ -85,10 +90,11 @@ class Seq2seq(nn.Module):
             target_mask = torch.full((b, 1), 1, dtype=source_mask.dtype).to(source_mask.device)
             predictions = source_embedded.new_zeros(b, self.max_seq_len, 1)
             for i in range(self.max_seq_len):
-                if self.attention:
-                    pass
                 target_embedded = self.target_embed(target_id, target_mask).squeeze(1)   # (b, d_t_emb)
                 d_out, states = self.decoder(target_embedded, target_mask[:, 0], states)
+                if self.attention:
+                    context = calculate_context_vector(e_out, states[0], source_mask)    # (b, d_d_hid)
+                    d_out = torch.cat((d_out, context), dim=-1)                          # (b, d_d_hid * 2)
 
                 output = self.w(self.maxout(d_out))                                      # (b, tar_vocab_size)
                 output[:, UNK] -= 1e6                                                    # mask <UNK>
@@ -110,3 +116,20 @@ class Seq2seq(nn.Module):
         # extract last hidden layer
         state = state[0]                                      # (b, d_e_hid * n_dir)
         return state
+
+
+def calculate_context_vector(encoder_hidden_states: torch.Tensor,          # (b, max_sou_seq_len, d_e_hid * n_dir)
+                             previous_decoder_hidden_state: torch.Tensor,  # (b, d_d_hid)
+                             source_mask: torch.Tensor  # (b, max_sou_seq_len)
+                             ) -> torch.Tensor:
+    b, max_sou_seq_len, d_hid = encoder_hidden_states.size()
+    # (b, max_sou_seq_len, d_hid)
+    previous_decoder_hidden_states = previous_decoder_hidden_state.unsqueeze(1).expand(b, max_sou_seq_len, d_hid)
+
+    alignment_weights = (encoder_hidden_states * previous_decoder_hidden_states).sum(dim=-1)
+    alignment_weights.masked_fill_(source_mask.ne(1), -1e6)
+    # (b, max_sou_seq_len, 1)
+    alignment_weights = F.softmax(alignment_weights, dim=-1).unsqueeze(-1)
+
+    context = (alignment_weights * encoder_hidden_states).sum(dim=1)  # (b, d_hid)
+    return context
