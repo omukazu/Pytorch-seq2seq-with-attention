@@ -33,7 +33,6 @@ class Embedder(nn.Module):
         self.embed.weight = nn.Parameter(torch.Tensor(initial_weight), requires_grad=(freeze is False))
 
 
-# for Generator
 class Encoder(nn.Module):
     def __init__(self,
                  rnn: nn.Module,
@@ -101,8 +100,8 @@ class Decoder(nn.Module):
         # all words are PAD or EOS
         else:
             # do not update hidden state
-            unsorted_output = states[0]
             unsorted_states = states
+            unsorted_output = states[0]
 
         # (b, d_d_hid), ((b, d_d_hid), (b, d_d_hid))
         return unsorted_output, unsorted_states
@@ -128,24 +127,3 @@ class Maxout(nn.Module):  # concatenation and activation layer
         out = self.w(x)
         y, _ = out.view(*size).max(max_dim)
         return y
-
-
-# for Discriminator
-class CNNPooler(nn.Module):
-    def __init__(self,
-                 n_filter: int,
-                 kernel_window: Tuple,
-                 max_seq_len: int
-                 ) -> None:
-        super(CNNPooler, self).__init__()
-        self.cnn = nn.Conv2d(in_channels=1, out_channels=n_filter, kernel_size=kernel_window)
-        self.bn = nn.BatchNorm2d(n_filter, 1)
-        self.pool = nn.MaxPool2d(max_seq_len)
-
-    def forward(self,
-                x: torch.Tensor,  # (b, 1, max_seq_len, d_t_emb)
-                ) -> torch.Tensor:
-        cnn = self.cnn(x)                   # (b, n_filter, max_seq_len)
-        bn = F.relu(self.bn(cnn))           # (b, n_filter, max_seq_len)
-        pooled = self.pool(bn).squeeze(-1)  # (b, n_filter)
-        return pooled

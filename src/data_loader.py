@@ -39,8 +39,6 @@ class Seq2seqDataset(Dataset):
             for line in f:
                 former, latter = line.strip().split(delimiter)
                 source_ids: List[int] = []
-                target_inp_ids: List[int] = []
-                target_out_ids: List[int] = []
                 for mrph in former.split():
                     if mrph in self.source_word_to_id.keys():
                         source_ids.append(self.source_word_to_id[mrph])
@@ -48,6 +46,8 @@ class Seq2seqDataset(Dataset):
                         source_ids.append(UNK)
                 sources.append(source_ids)
 
+                target_inp_ids: List[int] = []
+                target_out_ids: List[int] = []
                 target_inp_ids.append(BOS)
                 for mrph in latter.split():
                     if mrph in self.target_word_to_id.keys():
