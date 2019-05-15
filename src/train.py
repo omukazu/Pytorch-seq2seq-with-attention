@@ -66,17 +66,17 @@ def main():
                 label = target_outputs.to(device)
 
                 output = model(source, source_mask, target, target_mask)
-                # for s, t, p in zip(s_translation, t_translation, p_translation):
-                #     print(f'source:{" ".join(s)} / target:{" ".join(t)} / predict:{" ".join(p)}')
 
                 total_loss += calculate_loss(output, target_mask, label)
                 # num_iter = batch_idx + 1
             else:
-                predict = model.predict(source, source_mask)  # (batch, max_seq_len)
+                predict = model.predict(source, source_mask)  # (b, max_seq_len)
                 random_indices = randint(0, len(predict), 10)
-                p_translation = translate(predict[random_indices], target_id_to_word)
-                for p in p_translation:
-                    print(' '.join(p))
+                s_translation = translate(source[random_indices], source_id_to_word, is_target=False)
+                t_translation = translate(target[random_indices], target_id_to_word, is_target=True)
+                p_translation = translate(predict[random_indices], target_id_to_word, is_target=True)
+                for s, t, p in zip(s_translation, t_translation, p_translation):
+                    print(f'source:{" ".join(s)} / target:{" ".join(t)} / predict:{" ".join(p)}')
                 print(f'valid_loss={total_loss / (batch_idx + 1):.3f}', end=' ')
         # if valid_acc > best_acc:
     torch.save(model.state_dict(),

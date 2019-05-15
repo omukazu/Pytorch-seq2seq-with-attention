@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from constants import UNK, BOS, EOS
 from model_components import Embedder, Encoder, Decoder, Maxout
+from utils import calculate_context_vector
 
 
 class Seq2seq(nn.Module):
@@ -32,9 +33,9 @@ class Seq2seq(nn.Module):
         self.n_e_lay = n_e_layer
         self.bi_directional = bi_directional
         self.n_dir = 2 if bi_directional else 1
-        self.encoder = Encoder(nn.LSTM(input_size=self.d_s_emb, hidden_size=d_e_hid,
-                                       num_layers=self.n_e_lay, batch_first=True,
-                                       dropout=dropout_rate, bidirectional=bi_directional))
+        self.encoder = Encoder(rnn=nn.LSTM(input_size=self.d_s_emb, hidden_size=d_e_hid,
+                                           num_layers=self.n_e_lay, batch_first=True,
+                                           dropout=dropout_rate, bidirectional=bi_directional))
 
         self.attention = attention
         self.d_d_hid = d_e_hid * self.n_dir
@@ -42,7 +43,7 @@ class Seq2seq(nn.Module):
         assert self.d_d_hid % self.n_dir == 0, 'invalid d_e_hid'
         self.d_c_hid = self.d_d_hid if attention else 0
         self.d_out = (self.d_d_hid + self.d_c_hid) // self.n_dir
-        self.decoder = Decoder(nn.LSTMCell(input_size=self.d_t_emb, hidden_size=self.d_d_hid))
+        self.decoder = Decoder(rnn=nn.LSTMCell(input_size=self.d_t_emb, hidden_size=self.d_d_hid))
 
         self.maxout = Maxout(self.d_d_hid + self.d_c_hid, self.d_out, self.n_dir)
         self.w = nn.Linear(self.d_out, self.target_vocab_size)
@@ -116,20 +117,3 @@ class Seq2seq(nn.Module):
         # extract last hidden layer
         state = state[0]                                      # (b, d_e_hid * n_dir)
         return state
-
-
-def calculate_context_vector(encoder_hidden_states: torch.Tensor,          # (b, max_sou_seq_len, d_e_hid * n_dir)
-                             previous_decoder_hidden_state: torch.Tensor,  # (b, d_d_hid)
-                             source_mask: torch.Tensor  # (b, max_sou_seq_len)
-                             ) -> torch.Tensor:
-    b, max_sou_seq_len, d_hid = encoder_hidden_states.size()
-    # (b, max_sou_seq_len, d_hid)
-    previous_decoder_hidden_states = previous_decoder_hidden_state.unsqueeze(1).expand(b, max_sou_seq_len, d_hid)
-
-    alignment_weights = (encoder_hidden_states * previous_decoder_hidden_states).sum(dim=-1)
-    alignment_weights.masked_fill_(source_mask.ne(1), -1e6)
-    # (b, max_sou_seq_len, 1)
-    alignment_weights = F.softmax(alignment_weights, dim=-1).unsqueeze(-1)
-
-    context = (alignment_weights * encoder_hidden_states).sum(dim=1)  # (b, d_hid)
-    return context
