@@ -59,7 +59,7 @@ class Seq2seq(nn.Module):
         if self.attention:
             states = None
         else:
-            # (n_e_lay * n_dir, b, d_hid) -> (b, d_hid * n_dir), initialize cell state
+            # (n_e_lay * n_dir, b, d_e_hid) -> (b, d_e_hid * n_dir), initialize cell state
             states = (self.transform(states[0]), self.transform(states[1].new_zeros(states[1].size())))
 
         max_tar_seq_len = target.size(1)
@@ -124,12 +124,12 @@ class Seq2seq(nn.Module):
                                  source_mask: torch.Tensor                     # (b, max_sou_seq_len)
                                  ) -> torch.Tensor:
         b, max_sou_seq_len, d_d_hid = encoder_hidden_states.size()
-        # (b, max_sou_seq_len, d_hid)
+        # (b, max_sou_seq_len, d_d_hid)
         previous_decoder_hidden_states = previous_decoder_hidden_state.unsqueeze(1).expand(b, max_sou_seq_len, d_d_hid)
 
         alignment_weights = (encoder_hidden_states * previous_decoder_hidden_states).sum(dim=-1)
         alignment_weights.masked_fill_(source_mask.ne(1), -1e6)
         alignment_weights = F.softmax(alignment_weights, dim=-1).unsqueeze(-1)   # (b, max_sou_seq_len, 1)
 
-        context_vector = (alignment_weights * encoder_hidden_states).sum(dim=1)  # (b, d_hid)
+        context_vector = (alignment_weights * encoder_hidden_states).sum(dim=1)  # (b, d_d_hid)
         return context_vector

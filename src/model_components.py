@@ -73,7 +73,7 @@ class Decoder(nn.Module):
     def forward(self,
                 x: torch.Tensor,                           # (b, d_emb)
                 mask: torch.Tensor,                        # (b, 1)
-                states: Tuple[torch.Tensor, torch.Tensor]  # states[0]: (b, d_hid * n_dir)
+                states: Tuple[torch.Tensor, torch.Tensor]  # states[0]: (b, d_d_hid)
                 ) -> Tuple[torch.Tensor, Tuple[torch.Tensor]]:
         valid_len = mask.sum()
 
@@ -87,12 +87,12 @@ class Decoder(nn.Module):
                 cache = [state.index_select(0, sorted_indices) for state in states]
                 old_states = [state[valid_len:, :].contiguous() for state in cache]
                 states = [state[:valid_len, :].contiguous() for state in cache]
-            new_states = self.rnn(valid_input, states)  # state: (valid_len, d_hid * n_dir)
+            new_states = self.rnn(valid_input, states)  # state: (valid_len, d_d_hid)
 
             b = x.size(0)
 
             if valid_len < b and states is not None:
-                # (valid_len, d_d_hid * n_dir) -> (b, d_d_hid * n_dir)
+                # (valid_len, d_d_hid) -> (b, d_d_hid)
                 new_states = tuple([torch.cat((ns, os), dim=0) for ns, os in zip(new_states, old_states)])
 
             unsorted_states = tuple([new_state.index_select(0, unsorted_indices) for new_state in new_states])
