@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 from typing import Dict, List, Tuple
@@ -64,18 +65,17 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
     target_embeddings = ids_to_embeddings(target_word_to_id, w2v)
 
     if config['arguments']['model_name'] == 'Seq2seq':
-        model = Seq2seq(d_e_hid=config['arguments']['d_hidden'],
+        model = Seq2seq(d_e_hid=config['arguments']['d_hid'],
                         max_seq_len=config['arguments']['max_seq_len'],
                         source_embeddings=source_embeddings,
                         target_embeddings=target_embeddings)
-    if config['arguments']['model_name'] == 'VariationalSeq2seq':
-        model = VariationalSeq2seq(d_e_hid=config['arguments']['d_hidden'],
+    elif config['arguments']['model_name'] == 'VariationalSeq2seq':
+        model = VariationalSeq2seq(d_e_hid=config['arguments']['d_hid'],
                                    max_seq_len=config['arguments']['max_seq_len'],
                                    source_embeddings=source_embeddings,
                                    target_embeddings=target_embeddings)
     else:
-        print(f'Unknown model name: {config["arguments"]["model_name"]}', file=sys.stderr)
-        return
+        raise KeyError(f'Unknown model name: {config["arguments"]["model_name"]}')
 
     # setup device
     if args.gpu and torch.cuda.is_available():
@@ -101,6 +101,11 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
     optimizer = torch.optim.Adam(model.parameters(), lr=config['arguments']['learning_rate'])
 
     return source_id_to_word, target_id_to_word, model, device, train_data_loader, valid_data_loader, optimizer
+
+
+def sigmoid(x: int
+            ) -> float:
+    return 1 / (1 + math.exp(-x))
 
 
 def translate(predictions: torch.Tensor,

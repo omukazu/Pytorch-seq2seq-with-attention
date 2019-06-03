@@ -3,11 +3,13 @@ import os
 from argparse import ArgumentParser
 from argparse import RawTextHelpFormatter
 
-from numpy.random import randint
+import numpy as np
+from numpy.random import choice
+from progressbar import ProgressBar
 import torch
 
 from seq2seq import Seq2seq
-from utils import load_setting, translate
+from utils import load_setting, sigmoid, translate
 
 
 def main():
@@ -25,17 +27,22 @@ def main():
     source_id_to_word, target_id_to_word, model, device, train_data_loader, valid_data_loader, optimizer = \
         load_setting(config, args)
 
-    best_acc = 0
-    n_pred = 3
+    n_pred = 5
     n_sample = 1 if model == Seq2seq else 3
+    threshold = 10
 
+    bar = ProgressBar(0, len(train_data_loader))
     for epoch in range(1, config['arguments']['epoch'] + 1):
         print(f'*** epoch {epoch} ***')
         # train
         model.train()
+        annealing = sigmoid(epoch - threshold)
         total_loss = 0
+        total_rec_loss = 0
+        total_reg_loss = 0
         for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
                 in enumerate(train_data_loader):
+            bar.update(batch_idx)
             source = source.to(device)
             source_mask = source_mask.to(device)
             target = target_inputs.to(device)
@@ -43,22 +50,27 @@ def main():
             label = target_outputs.to(device)
 
             # Forward pass
-            loss = model(source, source_mask, target, target_mask, label)
+            loss, details = model(source, source_mask, target, target_mask, label, annealing)
 
             # Backward and optimize
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
+            total_loss += loss
+            total_rec_loss += details[0]
+            total_reg_loss += details[1]
         else:
-            print(f'train_loss={total_loss / (batch_idx + 1):.3f}')
+            print('')
+            print(f'train_loss={total_loss / (batch_idx + 1):.3f}'
+                  f'/rec:{total_rec_loss / (batch_idx + 1):.3f}/reg:{total_reg_loss / (batch_idx + 1):.3f}')
 
         # validation
         model.eval()
         with torch.no_grad():
             total_loss = 0
-            # num_iter = 0
+            total_rec_loss = 0
+            total_reg_loss = 0
             for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
                     in enumerate(valid_data_loader):
                 source = source.to(device)
@@ -67,11 +79,15 @@ def main():
                 target_mask = target_mask.to(device)
                 label = target_outputs.to(device)
 
-                total_loss += model(source, source_mask, target, target_mask, label)
-                # num_iter = batch_idx + 1
+                loss, details = model(source, source_mask, target, target_mask, label, annealing)
+                total_loss += loss
+                total_rec_loss += details[0]
+                total_reg_loss += details[1]
             else:
-                print(f'valid_loss={total_loss / (batch_idx + 1):.3f}')
-                random_indices = randint(0, len(source), n_pred)
+                print(f'valid_loss={total_loss / (batch_idx + 1):.3f}'
+                      f'/rec:{total_rec_loss / (batch_idx + 1):.3f}/reg:{total_reg_loss / (batch_idx + 1):.3f}')
+                random_indices = choice(np.arange(len(source)), n_pred,replace=False)
+                print(random_indices)
                 s_translation = translate(source[random_indices], source_id_to_word, is_target=False)
                 t_translation = translate(target[random_indices], target_id_to_word, is_target=True)
                 p_translation = \

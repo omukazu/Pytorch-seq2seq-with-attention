@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import torch
 from torch.distributions import Normal as Gaussian
 import torch.nn as nn
@@ -38,7 +40,7 @@ class VariationalSeq2seq(nn.Module):
                                            dropout=dropout_rate, bidirectional=bi_directional))
 
         self.mu = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
-        self.var = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
+        self.ln_var = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
 
         self.attention = attention
         self.d_d_hid = d_e_hid * self.n_dir
@@ -56,7 +58,8 @@ class VariationalSeq2seq(nn.Module):
                 source_mask: torch.Tensor,  # (b, max_sou_seq_len)
                 target: torch.Tensor,       # (b, max_tar_seq_len)
                 target_mask: torch.Tensor,  # (b, max_tar_seq_len)
-                label: torch.Tensor         # (b, max_tar_seq_len)
+                label: torch.Tensor,        # (b, max_tar_seq_len)
+                annealing: float
                 ) -> torch.Tensor:          # (b, max_tar_seq_len, d_emb)
         b = source.size(0)
         source_embedded = self.source_embed(source, source_mask)  # (b, max_sou_seq_len, d_s_emb)
@@ -64,8 +67,8 @@ class VariationalSeq2seq(nn.Module):
 
         h = self.transform(hidden, True)  # (n_e_lay * b, d_e_hid * n_dir)
         mu = self.mu(h)                   # (n_e_lay * b, d_e_hid * n_dir)
-        var = self.var(h)                 # (n_e_lay * b, d_e_hid * n_dir)
-        hidden = Gaussian(mu, var).sample()
+        ln_var = self.ln_var(h)           # (n_e_lay * b, d_e_hid * n_dir)
+        hidden = Gaussian(mu, ln_var).sample()
 
         # (n_e_lay * b, d_e_hid * n_dir) -> (b, d_e_hid * n_dir), initialize cell state
         states = (self.transform(hidden, False), self.transform(hidden.new_zeros(hidden.size()), False))
@@ -81,8 +84,8 @@ class VariationalSeq2seq(nn.Module):
                 context = self.calculate_context_vector(e_out, states[0], source_mask)  # (b, d_d_hid)
                 d_out = torch.cat((d_out, context), dim=-1)                             # (b, d_d_hid * 2)
             output[:, i, :] = self.w(self.maxout(d_out))  # (b, d_d_hid) -> (b, d_out) -> (b, tar_vocab_size)
-        loss = self.calculate_loss(output, target_mask, label, mu, var)
-        return loss
+        loss, details = self.calculate_loss(output, target_mask, label, mu, ln_var, annealing)
+        return loss, details
 
     def predict(self,
                 source: torch.Tensor,       # (b, max_sou_seq_len)
@@ -97,12 +100,8 @@ class VariationalSeq2seq(nn.Module):
 
             h = self.transform(hidden, True)
             mu = self.mu(h)
-            var = self.var(h)
-            if sampling:
-                z = Gaussian(mu, var)
-                hidden = z.sample()
-            else:
-                hidden = mu
+            ln_var = self.ln_var(h)
+            hidden = Gaussian(mu, ln_var).sample() if sampling else mu
 
             states = (self.transform(hidden, False), self.transform(hidden.new_zeros(hidden.size()), False))
 
@@ -142,8 +141,8 @@ class VariationalSeq2seq(nn.Module):
             state = state[0]
         return state
 
-    @staticmethod
     # soft attention, score is calculated by dot product
+    @staticmethod
     def calculate_context_vector(encoder_hidden_states: torch.Tensor,          # (b, max_sou_seq_len, d_e_hid * n_dir)
                                  previous_decoder_hidden_state: torch.Tensor,  # (b, d_d_hid)
                                  source_mask: torch.Tensor                     # (b, max_sou_seq_len)
@@ -163,19 +162,16 @@ class VariationalSeq2seq(nn.Module):
     def calculate_loss(output: torch.Tensor,       # (b, max_tar_len, vocab_size)
                        target_mask: torch.Tensor,  # (b, max_tar_len)
                        label: torch.Tensor,        # (b, max_tar_len)
-                       mu:  torch.Tensor,          # (n_e_lay * b, d_e_hid * n_dir)
-                       var:  torch.Tensor,         # (n_e_lay * b, d_e_hid * n_dir)
-                       coefficient: float = 1e-3
-                       ) -> torch.Tensor:
+                       mu: torch.Tensor,           # (n_e_lay * b, d_e_hid * n_dir)
+                       ln_var: torch.Tensor,       # (n_e_lay * b, d_e_hid * n_dir)
+                       coefficient: float,
+                       ) -> Tuple[torch.Tensor, Tuple]:
         b, max_tar_len, vocab_size = output.size()
         label = label.masked_select(target_mask.eq(1))
-        m, n = mu.size()
 
         prediction_mask = target_mask.unsqueeze(-1).expand(b, max_tar_len, vocab_size)  # (b, max_tar_len, vocab_size)
         prediction = output.masked_select(prediction_mask.eq(1)).contiguous().view(-1, vocab_size)
         reconstruction_loss = F.cross_entropy(prediction, label, reduction='none').sum() / b
-        standard_mu = torch.zeros(m, n, device=output.device)
-        standard_var = torch.ones(m, n, device=output.device)
-        regularization = torch.distributions.kl_divergence(Gaussian(mu, var), Gaussian(standard_mu, standard_var))
-        regularization_loss = regularization.sum() / b
-        return reconstruction_loss + coefficient * regularization_loss
+        kl_divergence = (mu ** 2 + ln_var.exp() - ln_var - 1) * 0.5
+        regularization_loss = kl_divergence.sum() / b
+        return reconstruction_loss + coefficient * regularization_loss, (reconstruction_loss, regularization_loss)

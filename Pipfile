@@ -12,6 +12,7 @@ gensim = "*"
 sklearn = "*"
 regex = "*"
 pyknp = "*"
+progressbar2 = "*"
 
 [requires]
 python_version = "3.6"
