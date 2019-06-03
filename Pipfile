@@ -10,7 +10,8 @@ ipython = "*"
 torch = "*"
 gensim = "*"
 sklearn = "*"
-tqdm = "*"
+regex = "*"
+pyknp = "*"
 
 [requires]
 python_version = "3.6"

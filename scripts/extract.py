@@ -3,7 +3,7 @@ import glob
 import multiprocessing as mp
 import os
 import time
-from typing import List
+from typing import List, Tuple
 
 import regex
 from pyknp import Juman
@@ -16,7 +16,8 @@ MORA_PATTERN = {5, 12, 17, 24, 31}
 
 
 def check_fullmatch(lines: List[str],
-                    jobs: int):
+                    jobs: int
+                    ) -> List[str]:
     chunk_size = len(lines) // jobs + 1
     chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
     with mp.Pool(jobs) as p:
@@ -28,17 +29,19 @@ def check_fullmatch(lines: List[str],
     return checked
 
 
-def _check_fullmatch(chunk: List[str]):
+def _check_fullmatch(chunk: List[str]
+                     ) -> List[str]:
     return [line for line in chunk if WHITE_LIST.fullmatch(line)]
 
 
 def analyze(lines: List[str],
-            jobs: int):
+            jobs: int
+            ) -> List[Tuple]:
     jumanpp = Juman()
     chunk_size = len(lines) // jobs + 1
     arguments = [(lines[i:i + chunk_size], jumanpp) for i in range(0, len(lines), chunk_size)]
     with mp.Pool(jobs) as p:
-        analyzed_chunks = p.map(_analyze, arguments)
+        analyzed_chunks = p.starmap(_analyze, arguments)
 
     analyzed = []
     for chunk in analyzed_chunks:
@@ -46,7 +49,9 @@ def analyze(lines: List[str],
     return analyzed
 
 
-def _analyze(chunk: List[str], jumanpp):
+def _analyze(chunk: List[str],
+             jumanpp: Juman
+             ) -> List[Tuple]:
     analyzed_chunk = []
     for sentence in chunk:
         try:
@@ -60,7 +65,8 @@ def _analyze(chunk: List[str], jumanpp):
 
 
 def cumsum(sub: List[tuple],
-           l: int):
+           l: int
+           ) -> List[int]:
     mora_counts = []
     count = 0
     for i in range(l):
@@ -70,7 +76,8 @@ def cumsum(sub: List[tuple],
     return mora_counts
 
 
-def rule(tanka):
+def rule(tanka: List
+         ) -> bool:
     if (tanka[2][-1][2] != '特殊' and '基本形' not in tanka[2][-1][3]) or \
             any([contidition in mora[0][2] for mora in tanka for contidition in {'助詞', '判定詞'}]) or \
             all([contidition not in tanka[0][-1][2] for contidition in {'助詞', '特殊'}]) or \
@@ -83,7 +90,8 @@ def rule(tanka):
 
 def extract_tanka(line: List[tuple],
                   index: int,
-                  count: List[int]):
+                  count: List[int]
+                  ) -> List:
     inversed = count[::-1]
     n = len(count)
     attention = [0,
@@ -100,7 +108,8 @@ def extract_tanka(line: List[tuple],
 
 
 def extract_tankas(lines: List[tuple],
-                   jobs: int):
+                   jobs: int
+                   ) -> List:
     chunk_size = len(lines) // jobs + 1
     chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
     with mp.Pool(jobs) as p:
@@ -112,7 +121,8 @@ def extract_tankas(lines: List[tuple],
     return [tanka for tanka in extracted if tanka]
 
 
-def _extract_tankas(chunk: List[tuple]):
+def _extract_tankas(chunk: List[tuple]
+                    ) -> List:
     tankas = []
     for sentences in chunk:
         analyzed = sentences[0]
@@ -133,7 +143,8 @@ def main():
     parser.add_argument('OUTPUT', default='None', help='path to output')
     args = parser.parse_args()
 
-    path = os.path.join(args.INPUT, '**/*.gz')
+    # path = os.path.join(args.INPUT, '**/*.gz')
+    path = os.path.join(args.INPUT, '*')
     input_files = glob.glob(path)
     output_files = [os.path.join(args.OUTPUT, str(i)) for i in range(len(input_files))]
     jobs = args.jobs

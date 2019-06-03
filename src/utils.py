@@ -10,6 +10,7 @@ from gensim.models import KeyedVectors
 from constants import PAD, BOS, EOS, UNK
 from data_loader import Seq2seqDataLoader
 from seq2seq import Seq2seq
+from variational_seq2seq import VariationalSeq2seq
 
 
 def load_vocabulary(source_path: str,
@@ -67,6 +68,11 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
                         max_seq_len=config['arguments']['max_seq_len'],
                         source_embeddings=source_embeddings,
                         target_embeddings=target_embeddings)
+    if config['arguments']['model_name'] == 'VariationalSeq2seq':
+        model = VariationalSeq2seq(d_e_hid=config['arguments']['d_hidden'],
+                                   max_seq_len=config['arguments']['max_seq_len'],
+                                   source_embeddings=source_embeddings,
+                                   target_embeddings=target_embeddings)
     else:
         print(f'Unknown model name: {config["arguments"]["model_name"]}', file=sys.stderr)
         return
@@ -95,19 +101,6 @@ def load_setting(config: Dict[str, Dict[str, str or int]],
     optimizer = torch.optim.Adam(model.parameters(), lr=config['arguments']['learning_rate'])
 
     return source_id_to_word, target_id_to_word, model, device, train_data_loader, valid_data_loader, optimizer
-
-
-def calculate_loss(output: torch.Tensor,        # (b, max_tar_len, vocab_size)
-                   target_mask: torch.Tensor,   # (b, max_tar_len)
-                   label: torch.Tensor,         # (b, max_tar_len)
-                   ) -> torch.Tensor:
-    b, max_tar_len, vocab_size = output.size()
-    label = label.masked_select(target_mask.eq(1))
-
-    prediction_mask = target_mask.unsqueeze(-1).expand(b, max_tar_len, vocab_size)  # (b, max_tar_len, vocab_size)
-    prediction = output.masked_select(prediction_mask.eq(1)).contiguous().view(-1, vocab_size)
-    loss = F.cross_entropy(prediction, label, reduction='none').sum() / b
-    return loss
 
 
 def translate(predictions: torch.Tensor,

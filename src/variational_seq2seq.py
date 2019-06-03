@@ -1,4 +1,5 @@
 import torch
+from torch.distributions import Normal as Gaussian
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -6,7 +7,7 @@ from constants import UNK, BOS, EOS
 from model_components import Embedder, Encoder, Decoder, Maxout
 
 
-class Seq2seq(nn.Module):
+class VariationalSeq2seq(nn.Module):
     def __init__(self,
                  d_e_hid: int,
                  max_seq_len: int,
@@ -19,7 +20,7 @@ class Seq2seq(nn.Module):
                  n_e_layer: int = 2,
                  n_d_layer: int = 1
                  ) -> None:
-        super(Seq2seq, self).__init__()
+        super(VariationalSeq2seq, self).__init__()
         self.max_seq_len = max_seq_len
 
         self.source_vocab_size, self.d_s_emb = source_embeddings.size()
@@ -35,6 +36,9 @@ class Seq2seq(nn.Module):
         self.encoder = Encoder(rnn=nn.LSTM(input_size=self.d_s_emb, hidden_size=d_e_hid,
                                            num_layers=self.n_e_lay, batch_first=True,
                                            dropout=dropout_rate, bidirectional=bi_directional))
+
+        self.mu = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
+        self.var = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
 
         self.attention = attention
         self.d_d_hid = d_e_hid * self.n_dir
@@ -56,12 +60,15 @@ class Seq2seq(nn.Module):
                 ) -> torch.Tensor:          # (b, max_tar_seq_len, d_emb)
         b = source.size(0)
         source_embedded = self.source_embed(source, source_mask)  # (b, max_sou_seq_len, d_s_emb)
-        e_out, (hidden, cell) = self.encoder(source_embedded, source_mask)
-        if self.attention:
-            states = None
-        else:
-            # (n_e_lay * n_dir, b, d_e_hid) -> (b, d_e_hid * n_dir), initialize cell state
-            states = (self.transform(hidden), self.transform(cell.new_zeros(cell.size())))
+        e_out, (hidden, _) = self.encoder(source_embedded, source_mask)
+
+        h = self.transform(hidden, True)  # (n_e_lay * b, d_e_hid * n_dir)
+        mu = self.mu(h)                   # (n_e_lay * b, d_e_hid * n_dir)
+        var = self.var(h)                 # (n_e_lay * b, d_e_hid * n_dir)
+        hidden = Gaussian(mu, var).sample()
+
+        # (n_e_lay * b, d_e_hid * n_dir) -> (b, d_e_hid * n_dir), initialize cell state
+        states = (self.transform(hidden, False), self.transform(hidden.new_zeros(hidden.size()), False))
 
         max_tar_seq_len = target.size(1)
         output = source_embedded.new_zeros((b, max_tar_seq_len, self.target_vocab_size))
@@ -74,23 +81,30 @@ class Seq2seq(nn.Module):
                 context = self.calculate_context_vector(e_out, states[0], source_mask)  # (b, d_d_hid)
                 d_out = torch.cat((d_out, context), dim=-1)                             # (b, d_d_hid * 2)
             output[:, i, :] = self.w(self.maxout(d_out))  # (b, d_d_hid) -> (b, d_out) -> (b, tar_vocab_size)
-        loss = self.calculate_loss(output, target_mask, label)
+        loss = self.calculate_loss(output, target_mask, label, mu, var)
         return loss
 
     def predict(self,
                 source: torch.Tensor,       # (b, max_sou_seq_len)
                 source_mask: torch.Tensor,  # (b, max_sou_seq_len)
+                sampling: bool = True
                 ) -> torch.Tensor:          # (b, max_seq_len)
         self.eval()
         with torch.no_grad():
             b = source.size(0)
             source_embedded = self.source_embed(source, source_mask)                        # (b, max_seq_len, d_s_emb)
-            e_out, (hidden, cell) = self.encoder(source_embedded, source_mask)
-            if self.attention:
-                states = None
+            e_out, (hidden, _) = self.encoder(source_embedded, source_mask)
+
+            h = self.transform(hidden, True)
+            mu = self.mu(h)
+            var = self.var(h)
+            if sampling:
+                z = Gaussian(mu, var)
+                hidden = z.sample()
             else:
-                # (n_e_lay * n_dir, b, d_e_hid) -> (b, d_e_hid * n_dir), initialize cell state
-                states = (self.transform(hidden), self.transform(cell.new_zeros(cell.size())))
+                hidden = mu
+
+            states = (self.transform(hidden, False), self.transform(hidden.new_zeros(hidden.size()), False))
 
             target_id = torch.full((b, 1), BOS, dtype=source.dtype).to(source.device)
             target_mask = torch.full((b, 1), 1, dtype=source_mask.dtype).to(source_mask.device)
@@ -113,14 +127,19 @@ class Seq2seq(nn.Module):
         return predictions
 
     def transform(self,
-                  state: torch.Tensor  # (n_e_lay * n_dir, b, d_e_hid)
+                  state: torch.Tensor,  # (n_e_lay * n_dir, b, d_e_hid) or (n_e_lay * b, d_e_hid * n_dir)
+                  switch: bool
                   ) -> torch.Tensor:
-        b = state.size(1)
-        state = state.contiguous().view(self.n_e_lay, self.n_dir, b, -1)
-        state = state.permute(0, 2, 3, 1)                     # (n_e_lay, b, d_e_hid, n_dir)
-        state = state.contiguous().view(self.n_e_lay, b, -1)  # (n_e_lay, b, d_e_hid * n_dir)
-        # extract last hidden layer
-        state = state[0]                                      # (b, d_e_hid * n_dir)
+        if switch:
+            b = state.size(1)
+            state = state.contiguous().view(self.n_e_lay, self.n_dir, b, -1)
+            state = state.permute(0, 2, 3, 1)                      # (n_e_lay, b, d_e_hid, n_dir)
+            state = state.contiguous().view(self.n_e_lay * b, -1)  # (n_e_lay * b, d_e_hid * n_dir)
+        else:
+            b = state.size(0) // self.n_e_lay
+            state = state.contiguous().view(self.n_e_lay, b, -1)
+            # extract hidden layer
+            state = state[0]
         return state
 
     @staticmethod
@@ -141,14 +160,22 @@ class Seq2seq(nn.Module):
         return context_vector
 
     @staticmethod
-    def calculate_loss(output: torch.Tensor,  # (b, max_tar_len, vocab_size)
+    def calculate_loss(output: torch.Tensor,       # (b, max_tar_len, vocab_size)
                        target_mask: torch.Tensor,  # (b, max_tar_len)
-                       label: torch.Tensor,  # (b, max_tar_len)
+                       label: torch.Tensor,        # (b, max_tar_len)
+                       mu:  torch.Tensor,          # (n_e_lay * b, d_e_hid * n_dir)
+                       var:  torch.Tensor,         # (n_e_lay * b, d_e_hid * n_dir)
+                       coefficient: float = 1e-3
                        ) -> torch.Tensor:
         b, max_tar_len, vocab_size = output.size()
         label = label.masked_select(target_mask.eq(1))
+        m, n = mu.size()
 
         prediction_mask = target_mask.unsqueeze(-1).expand(b, max_tar_len, vocab_size)  # (b, max_tar_len, vocab_size)
         prediction = output.masked_select(prediction_mask.eq(1)).contiguous().view(-1, vocab_size)
-        loss = F.cross_entropy(prediction, label, reduction='none').sum() / b
-        return loss
+        reconstruction_loss = F.cross_entropy(prediction, label, reduction='none').sum() / b
+        standard_mu = torch.zeros(m, n, device=output.device)
+        standard_var = torch.ones(m, n, device=output.device)
+        regularization = torch.distributions.kl_divergence(Gaussian(mu, var), Gaussian(standard_mu, standard_var))
+        regularization_loss = regularization.sum() / b
+        return reconstruction_loss + coefficient * regularization_loss
