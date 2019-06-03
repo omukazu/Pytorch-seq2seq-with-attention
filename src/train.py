@@ -28,7 +28,7 @@ def main():
         load_setting(config, args)
 
     n_pred = 5
-    n_sample = 1 if model == Seq2seq else 3
+    n_sample = 1 if model == Seq2seq else 5
     threshold = 10
 
     bar = ProgressBar(0, len(train_data_loader))
@@ -40,6 +40,7 @@ def main():
         total_loss = 0
         total_rec_loss = 0
         total_reg_loss = 0
+        total_c_loss = 0
         for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
                 in enumerate(train_data_loader):
             bar.update(batch_idx)
@@ -60,10 +61,13 @@ def main():
             total_loss += loss
             total_rec_loss += details[0]
             total_reg_loss += details[1]
+            total_c_loss += details[2]
         else:
             print('')
             print(f'train_loss={total_loss / (batch_idx + 1):.3f}'
-                  f'/rec:{total_rec_loss / (batch_idx + 1):.3f}/reg:{total_reg_loss / (batch_idx + 1):.3f}')
+                  f'/rec:{total_rec_loss / (batch_idx + 1):.3f}'
+                  f'/reg:{total_reg_loss / (batch_idx + 1):.3f}'
+                  f'/c:{total_c_loss / (batch_idx + 1):.3f}')
 
         # validation
         model.eval()
@@ -71,6 +75,7 @@ def main():
             total_loss = 0
             total_rec_loss = 0
             total_reg_loss = 0
+            total_c_loss = 0
             for batch_idx, (source, source_mask, target_inputs, target_outputs, target_mask) \
                     in enumerate(valid_data_loader):
                 source = source.to(device)
@@ -83,10 +88,13 @@ def main():
                 total_loss += loss
                 total_rec_loss += details[0]
                 total_reg_loss += details[1]
+                total_c_loss += details[2]
             else:
                 print(f'valid_loss={total_loss / (batch_idx + 1):.3f}'
-                      f'/rec:{total_rec_loss / (batch_idx + 1):.3f}/reg:{total_reg_loss / (batch_idx + 1):.3f}')
-                random_indices = choice(np.arange(len(source)), n_pred,replace=False)
+                      f'/rec:{total_rec_loss / (batch_idx + 1):.3f}'
+                      f'/reg:{total_reg_loss / (batch_idx + 1):.3f}'
+                      f'/c:{total_c_loss / (batch_idx + 1):.3f}')
+                random_indices = choice(np.arange(len(source)), n_pred, replace=False)
                 print(random_indices)
                 s_translation = translate(source[random_indices], source_id_to_word, is_target=False)
                 t_translation = translate(target[random_indices], target_id_to_word, is_target=True)

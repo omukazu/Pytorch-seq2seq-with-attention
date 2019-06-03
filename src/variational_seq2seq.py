@@ -39,8 +39,8 @@ class VariationalSeq2seq(nn.Module):
                                            num_layers=self.n_e_lay, batch_first=True,
                                            dropout=dropout_rate, bidirectional=bi_directional))
 
-        self.mu = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
-        self.ln_var = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
+        self.z_mu = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
+        self.z_ln_var = nn.Linear(d_e_hid * self.n_dir, d_e_hid * self.n_dir)
 
         self.attention = attention
         self.d_d_hid = d_e_hid * self.n_dir
@@ -49,6 +49,9 @@ class VariationalSeq2seq(nn.Module):
         self.d_c_hid = self.d_d_hid if attention else 0
         self.d_out = (self.d_d_hid + self.d_c_hid) // self.n_dir
         self.decoder = Decoder(rnn=nn.LSTMCell(input_size=self.d_t_emb, hidden_size=self.d_d_hid))
+
+        self.c_tanh = nn.Tanh()
+        self.c_linear = nn.Linear(self.d_c_hid, self.d_c_hid)
 
         self.maxout = Maxout(self.d_d_hid + self.d_c_hid, self.d_out, self.n_dir)
         self.w = nn.Linear(self.d_out, self.target_vocab_size)
@@ -60,15 +63,15 @@ class VariationalSeq2seq(nn.Module):
                 target_mask: torch.Tensor,  # (b, max_tar_seq_len)
                 label: torch.Tensor,        # (b, max_tar_seq_len)
                 annealing: float
-                ) -> torch.Tensor:          # (b, max_tar_seq_len, d_emb)
+                ) -> Tuple[torch.Tensor, Tuple]:                  # (b, max_tar_seq_len, d_emb)
         b = source.size(0)
         source_embedded = self.source_embed(source, source_mask)  # (b, max_sou_seq_len, d_s_emb)
         e_out, (hidden, _) = self.encoder(source_embedded, source_mask)
 
         h = self.transform(hidden, True)  # (n_e_lay * b, d_e_hid * n_dir)
-        mu = self.mu(h)                   # (n_e_lay * b, d_e_hid * n_dir)
-        ln_var = self.ln_var(h)           # (n_e_lay * b, d_e_hid * n_dir)
-        hidden = Gaussian(mu, ln_var).sample()
+        z_mu = self.z_mu(h)               # (n_e_lay * b, d_e_hid * n_dir)
+        z_ln_var = self.z_ln_var(h)       # (n_e_lay * b, d_e_hid * n_dir)
+        hidden = Gaussian(z_mu, z_ln_var).rsample()  # reparameterization trick
 
         # (n_e_lay * b, d_e_hid * n_dir) -> (b, d_e_hid * n_dir), initialize cell state
         states = (self.transform(hidden, False), self.transform(hidden.new_zeros(hidden.size()), False))
@@ -77,14 +80,17 @@ class VariationalSeq2seq(nn.Module):
         output = source_embedded.new_zeros((b, max_tar_seq_len, self.target_vocab_size))
         target_embedded = self.target_embed(target, target_mask)  # (b, max_tar_seq_len, d_t_emb)
         target_embedded = target_embedded.transpose(1, 0)         # (max_tar_seq_len, b, d_t_emb)
+        total_context_loss = 0
         # decode per word
         for i in range(max_tar_seq_len):
             d_out, states = self.decoder(target_embedded[i], target_mask[:, i], states)
             if self.attention:
-                context = self.calculate_context_vector(e_out, states[0], source_mask)  # (b, d_d_hid)
-                d_out = torch.cat((d_out, context), dim=-1)                             # (b, d_d_hid * 2)
+                context, cs = self.calculate_context_vector(e_out, states[0], source_mask, False)  # (b, d_d_hid)
+                total_context_loss += self.calculate_context_loss(cs)
+                d_out = torch.cat((d_out, context), dim=-1)                                        # (b, d_d_hid * 2)
             output[:, i, :] = self.w(self.maxout(d_out))  # (b, d_d_hid) -> (b, d_out) -> (b, tar_vocab_size)
-        loss, details = self.calculate_loss(output, target_mask, label, mu, ln_var, annealing)
+        loss, details = self.calculate_loss(output, target_mask, label,
+                                            z_mu, z_ln_var, total_context_loss, annealing)
         return loss, details
 
     def predict(self,
@@ -112,8 +118,8 @@ class VariationalSeq2seq(nn.Module):
                 target_embedded = self.target_embed(target_id, target_mask).squeeze(1)      # (b, d_t_emb)
                 d_out, states = self.decoder(target_embedded, target_mask[:, 0], states)
                 if self.attention:
-                    context = self.calculate_context_vector(e_out, states[0], source_mask)  # (b, d_d_hid)
-                    d_out = torch.cat((d_out, context), dim=-1)                             # (b, d_d_hid * 2)
+                    context, _ = self.calculate_context_vector(e_out, states[0], source_mask, True)
+                    d_out = torch.cat((d_out, context), dim=-1)
 
                 output = self.w(self.maxout(d_out))                                         # (b, tar_vocab_size)
                 output[:, UNK] -= 1e6                                                       # mask <UNK>
@@ -141,12 +147,13 @@ class VariationalSeq2seq(nn.Module):
             state = state[0]
         return state
 
-    # soft attention, score is calculated by dot product
-    @staticmethod
-    def calculate_context_vector(encoder_hidden_states: torch.Tensor,          # (b, max_sou_seq_len, d_e_hid * n_dir)
+    # variational soft attention, score is calculated by dot product
+    def calculate_context_vector(self,
+                                 encoder_hidden_states: torch.Tensor,          # (b, max_sou_seq_len, d_e_hid * n_dir)
                                  previous_decoder_hidden_state: torch.Tensor,  # (b, d_d_hid)
-                                 source_mask: torch.Tensor                     # (b, max_sou_seq_len)
-                                 ) -> torch.Tensor:
+                                 source_mask: torch.Tensor,                    # (b, max_sou_seq_len)
+                                 is_prediction: bool
+                                 ) -> Tuple[torch.Tensor, Tuple]:
         b, max_sou_seq_len, d_d_hid = encoder_hidden_states.size()
         # (b, max_sou_seq_len, d_d_hid)
         previous_decoder_hidden_states = previous_decoder_hidden_state.unsqueeze(1).expand(b, max_sou_seq_len, d_d_hid)
@@ -154,9 +161,20 @@ class VariationalSeq2seq(nn.Module):
         alignment_weights = (encoder_hidden_states * previous_decoder_hidden_states).sum(dim=-1)
         alignment_weights.masked_fill_(source_mask.ne(1), -1e6)
         alignment_weights = F.softmax(alignment_weights, dim=-1).unsqueeze(-1)   # (b, max_sou_seq_len, 1)
-
         context_vector = (alignment_weights * encoder_hidden_states).sum(dim=1)  # (b, d_d_hid)
-        return context_vector
+
+        c_mu = context_vector
+        c_ln_var = F.relu(self.c_linear(self.c_tanh(context_vector)))
+        context_vector = Gaussian(c_mu, c_ln_var).sample() if is_prediction else Gaussian(c_mu, c_ln_var).rsample()
+        return context_vector, (c_mu, c_ln_var)
+
+    @staticmethod
+    def calculate_context_loss(cs: Tuple[torch.Tensor, torch.Tensor]
+                               ) -> torch.Tensor:
+        c_mu, c_ln_var = cs
+        b = c_mu.size(0)
+        kl_divergence = (c_mu ** 2 + c_ln_var.exp() - c_ln_var - 1) * 0.5
+        return kl_divergence.sum() / b
 
     @staticmethod
     def calculate_loss(output: torch.Tensor,       # (b, max_tar_len, vocab_size)
@@ -164,7 +182,9 @@ class VariationalSeq2seq(nn.Module):
                        label: torch.Tensor,        # (b, max_tar_len)
                        mu: torch.Tensor,           # (n_e_lay * b, d_e_hid * n_dir)
                        ln_var: torch.Tensor,       # (n_e_lay * b, d_e_hid * n_dir)
-                       coefficient: float,
+                       total_context_loss: torch.Tensor,
+                       annealing: float,
+                       gamma: float = 10,
                        ) -> Tuple[torch.Tensor, Tuple]:
         b, max_tar_len, vocab_size = output.size()
         label = label.masked_select(target_mask.eq(1))
@@ -174,4 +194,5 @@ class VariationalSeq2seq(nn.Module):
         reconstruction_loss = F.cross_entropy(prediction, label, reduction='none').sum() / b
         kl_divergence = (mu ** 2 + ln_var.exp() - ln_var - 1) * 0.5
         regularization_loss = kl_divergence.sum() / b
-        return reconstruction_loss + coefficient * regularization_loss, (reconstruction_loss, regularization_loss)
+        return reconstruction_loss + annealing * (regularization_loss + gamma * total_context_loss), \
+            (reconstruction_loss, regularization_loss, total_context_loss)

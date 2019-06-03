@@ -10,8 +10,8 @@ This repository contains a sequence to sequence model with attention using Pytor
 
 ![Seq2seq](https://github.com/omukazu/Pytorch-Seq2seq-with-Attention/blob/images/image/Seq2seq.png)
 
-- Variational Seq2seq with Attention
+- Variational Seq2seq with Variational Attention
 
 ![Variational](https://github.com/omukazu/Pytorch-Seq2seq-with-Attention/blob/images/image/Variational.png)
 
-These models use soft attention mechanism and score is calculated by dot product. 
+These models use soft attention mechanism and score is calculated by dot product.
