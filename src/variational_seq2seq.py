@@ -72,7 +72,6 @@ class VariationalSeq2seq(nn.Module):
         z_mu = self.z_mu(h)               # (n_e_lay * b, d_e_hid * n_dir)
         z_ln_var = self.z_ln_var(h)       # (n_e_lay * b, d_e_hid * n_dir)
         hidden = Gaussian(z_mu, z_ln_var).rsample()  # reparameterization trick
-
         # (n_e_lay * b, d_e_hid * n_dir) -> (b, d_e_hid * n_dir), initialize cell state
         states = (self.transform(hidden, False), self.transform(hidden.new_zeros(hidden.size()), False))
 
@@ -85,9 +84,9 @@ class VariationalSeq2seq(nn.Module):
         for i in range(max_tar_seq_len):
             d_out, states = self.decoder(target_embedded[i], target_mask[:, i], states)
             if self.attention:
-                context, cs = self.calculate_context_vector(e_out, states[0], source_mask, False)  # (b, d_d_hid)
+                context, cs = self.calculate_context_vector(e_out, states[0], source_mask, True)  # (b, d_d_hid)
                 total_context_loss += self.calculate_context_loss(cs)
-                d_out = torch.cat((d_out, context), dim=-1)                                        # (b, d_d_hid * 2)
+                d_out = torch.cat((d_out, context), dim=-1)                                       # (b, d_d_hid * 2)
             output[:, i, :] = self.w(self.maxout(d_out))  # (b, d_d_hid) -> (b, d_out) -> (b, tar_vocab_size)
         loss, details = self.calculate_loss(output, target_mask, label,
                                             z_mu, z_ln_var, total_context_loss, annealing)
@@ -105,10 +104,9 @@ class VariationalSeq2seq(nn.Module):
             e_out, (hidden, _) = self.encoder(source_embedded, source_mask)
 
             h = self.transform(hidden, True)
-            mu = self.mu(h)
-            ln_var = self.ln_var(h)
-            hidden = Gaussian(mu, ln_var).sample() if sampling else mu
-
+            z_mu = self.z_mu(h)
+            z_ln_var = self.z_ln_var(h)
+            hidden = Gaussian(z_mu, z_ln_var).sample() if sampling else z_mu
             states = (self.transform(hidden, False), self.transform(hidden.new_zeros(hidden.size()), False))
 
             target_id = torch.full((b, 1), BOS, dtype=source.dtype).to(source.device)
@@ -118,7 +116,7 @@ class VariationalSeq2seq(nn.Module):
                 target_embedded = self.target_embed(target_id, target_mask).squeeze(1)      # (b, d_t_emb)
                 d_out, states = self.decoder(target_embedded, target_mask[:, 0], states)
                 if self.attention:
-                    context, _ = self.calculate_context_vector(e_out, states[0], source_mask, True)
+                    context, _ = self.calculate_context_vector(e_out, states[0], source_mask, False)
                     d_out = torch.cat((d_out, context), dim=-1)
 
                 output = self.w(self.maxout(d_out))                                         # (b, tar_vocab_size)
@@ -152,7 +150,7 @@ class VariationalSeq2seq(nn.Module):
                                  encoder_hidden_states: torch.Tensor,          # (b, max_sou_seq_len, d_e_hid * n_dir)
                                  previous_decoder_hidden_state: torch.Tensor,  # (b, d_d_hid)
                                  source_mask: torch.Tensor,                    # (b, max_sou_seq_len)
-                                 is_prediction: bool
+                                 is_training: bool
                                  ) -> Tuple[torch.Tensor, Tuple]:
         b, max_sou_seq_len, d_d_hid = encoder_hidden_states.size()
         # (b, max_sou_seq_len, d_d_hid)
@@ -164,8 +162,8 @@ class VariationalSeq2seq(nn.Module):
         context_vector = (alignment_weights * encoder_hidden_states).sum(dim=1)  # (b, d_d_hid)
 
         c_mu = context_vector
-        c_ln_var = F.relu(self.c_linear(self.c_tanh(context_vector)))
-        context_vector = Gaussian(c_mu, c_ln_var).sample() if is_prediction else Gaussian(c_mu, c_ln_var).rsample()
+        c_ln_var = (self.c_linear(self.c_tanh(context_vector))).exp()
+        context_vector = Gaussian(c_mu, c_ln_var).rsample() if is_training else Gaussian(c_mu, c_ln_var).sample()
         return context_vector, (c_mu, c_ln_var)
 
     @staticmethod
@@ -174,7 +172,8 @@ class VariationalSeq2seq(nn.Module):
         c_mu, c_ln_var = cs
         b = c_mu.size(0)
         kl_divergence = (c_mu ** 2 + c_ln_var.exp() - c_ln_var - 1) * 0.5
-        return kl_divergence.sum() / b
+        context_loss = kl_divergence.sum() / b
+        return context_loss
 
     @staticmethod
     def calculate_loss(output: torch.Tensor,       # (b, max_tar_len, vocab_size)

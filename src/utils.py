@@ -1,6 +1,5 @@
 import math
 import os
-import sys
 from typing import Dict, List, Tuple
 
 import numpy
@@ -40,7 +39,7 @@ def load_vocabulary(source_path: str,
 def ids_to_embeddings(word_to_id: Dict[str, int],
                       w2v: KeyedVectors
                       ) -> torch.Tensor:
-    embeddings = numpy.zeros((len(word_to_id), w2v.vector_size), 'f')  # (vocab_size, d_emb)
+    embeddings = numpy.zeros((len(word_to_id), w2v.vector_size), dtype='f')  # (vocab_size, d_emb)
     unk_indices = []
     for w, i in word_to_id.items():
         if w in w2v.vocab:

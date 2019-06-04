@@ -6,11 +6,11 @@ This repository contains a sequence to sequence model with attention using Pytor
 - Try to remove the effect of PAD symbols as much as possible
 
 ## Model
-- Seq2seq with Attention
+- Seq2seq with Attention [Bahdanau et al. 14]
 
 ![Seq2seq](https://github.com/omukazu/Pytorch-Seq2seq-with-Attention/blob/images/image/Seq2seq.png)
 
-- Variational Seq2seq with Variational Attention
+- Variational Seq2seq with Variational Attention [Bahuleyan et al. 18]
 
 ![Variational](https://github.com/omukazu/Pytorch-Seq2seq-with-Attention/blob/images/image/Variational.png)
 

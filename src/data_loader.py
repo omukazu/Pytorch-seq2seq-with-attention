@@ -11,10 +11,12 @@ class Seq2seqDataset(Dataset):
     def __init__(self,
                  path: str,
                  source_word_to_id: Dict[str, int],
-                 target_word_to_id: Dict[str, int]
+                 target_word_to_id: Dict[str, int],
+                 seq_lim:int = 30
                  ) -> None:
         self.source_word_to_id = source_word_to_id
         self.target_word_to_id = target_word_to_id
+        self.seq_lim = seq_lim
         self.sources, self.targets = self._load(path)
 
     def __len__(self) -> int:
@@ -48,7 +50,6 @@ class Seq2seqDataset(Dataset):
 
                 target_inp_ids: List[int] = []
                 target_out_ids: List[int] = []
-                target_inp_ids.append(BOS)
                 for mrph in latter.split():
                     if mrph in self.target_word_to_id.keys():
                         target_inp_ids.append(self.target_word_to_id[mrph])
@@ -56,6 +57,10 @@ class Seq2seqDataset(Dataset):
                     else:
                         target_inp_ids.append(UNK)
                         target_out_ids.append(UNK)
+                if self.seq_lim is not None and len(target_inp_ids) > self.seq_lim:
+                    target_inp_ids = target_inp_ids[-self.seq_lim:]
+                    target_out_ids = target_out_ids[-self.seq_lim:]
+                target_inp_ids.insert(0, BOS)
                 target_out_ids.append(EOS)
                 targets.append([target_inp_ids, target_out_ids])
         return sources, targets
