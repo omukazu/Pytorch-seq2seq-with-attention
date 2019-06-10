@@ -30,6 +30,7 @@ def main():
     n_pred = 5
     n_sample = 1 if model == Seq2seq else 5
     threshold = 5
+    clip = 1e-2
 
     bar = ProgressBar(0, len(train_data_loader))
     for epoch in range(1, config['arguments']['epoch'] + 1):
@@ -56,9 +57,8 @@ def main():
             # Backward and optimize
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             optimizer.step()
-
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.25)
 
             total_loss += loss
             total_rec_loss += details[0]

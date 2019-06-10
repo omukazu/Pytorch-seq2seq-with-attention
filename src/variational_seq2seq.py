@@ -90,6 +90,8 @@ class VariationalSeq2seq(nn.Module):
             output[:, i, :] = self.w(self.maxout(d_out))  # (b, d_d_hid) -> (b, d_out) -> (b, tar_vocab_size)
         loss, details = self.calculate_loss(output, target_mask, label,
                                             z_mu, z_ln_var, total_context_loss, annealing)
+        if torch.isnan(loss).any():
+            raise ValueError('nan detected')
         return loss, details
 
     def predict(self,

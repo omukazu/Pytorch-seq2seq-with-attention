@@ -17,7 +17,10 @@ MORA_PATTERN = {5, 12, 17, 24, 31}
 
 def count_mora(pronunciation: str
                ) -> int:
-    return len(pronunciation) - len(regex.findall(SUTEGANA, pronunciation))
+    if HIRAGANA.fullmatch(pronunciation):
+        return len(pronunciation) - len(regex.findall(SUTEGANA, pronunciation))
+    else:
+        raise ValueError
 
 
 def cumsum(partial_sequence: List[List],
@@ -26,7 +29,7 @@ def cumsum(partial_sequence: List[List],
     mora_counts = []
     count = 0
     for i in range(l):
-        count += sum(mora for _, mora in partial_sequence[i])
+        count += sum(analysis[1] for analysis in partial_sequence[i])
         mora_counts.append(count)
     # return the cumulative sum of mora
     return mora_counts
@@ -44,10 +47,19 @@ def extract_poem(phrases: List[List],
                  n - inversed.index(17),
                  n - inversed.index(24),
                  n - inversed.index(31)]
-    poem = []
-    for i in range(len(attention) - 1):
-        poem.append(phrases[index + attention[i]:index + attention[i + 1]])
-    return poem
+    return [phrases[index + attention[i]:index + attention[i + 1]] for i in range(len(attention) - 1)]
+
+
+# poem[mora][phrase][morpheme][analysis]
+def criteria(poem: List[List]
+             ) -> bool:
+    beginning_condition = poem[0][0][0][2] not in {'助詞', '判定詞'}
+    middle_condition = poem[2][-1][-1][2] in {'助詞', '特殊'}
+    middle_condition |= '基本形' in poem[2][-1][-1][4]
+    end_condition = poem[4][-1][-1][2] in {'接尾辞', '判定詞'}
+    end_condition |= poem[4][-1][-1][3] == '終助詞'
+    end_condition |= any(conjugation in poem[4][-1][-1][4] for conjugation in {'基本形', 'タ形'})
+    return beginning_condition & middle_condition & end_condition
 
 
 def extract_poems(lines: List[str],
@@ -73,7 +85,8 @@ def _extract_poems(chunk: List[str],
         if WHITE_LIST.fullmatch(line):
             try:
                 parsed = knp.parse(line)
-                phrases = [[(mrph.midasi, count_mora(mrph.yomi)) for mrph in bnst.mrph_list()]
+                phrases = [[(mrph.midasi, count_mora(mrph.yomi), mrph.hinsi, mrph.bunrui, mrph.katuyou2)
+                            for mrph in bnst.mrph_list()]
                            for bnst in parsed.bnst_list()]
             except ValueError:
                 continue
@@ -81,7 +94,9 @@ def _extract_poems(chunk: List[str],
             mora_counts = [cumsum(phrases[start:], n - start) for start in range(n)]
             for index, mora_count in enumerate(mora_counts):
                 if len(MORA_PATTERN - set(mora_count)) == 0:
-                    poems.append((extract_poem(phrases, index, mora_count), line))
+                    poem = extract_poem(phrases, index, mora_count)
+                    if criteria(poem):
+                        poems.append((poem, line))
     return poems
 
 
@@ -112,7 +127,8 @@ def main():
         print('start writing' + f' file-{str(i)}')
         with open(output_files[i], "w") as out:
             for poem in poems:
-                out.write(''.join([mrph[0] for mora in poem[0] for phrase in mora for mrph in phrase]) + '\t' + poem[1] + '\n')
+                p = ''.join([mrph[0] for mora in poem[0] for phrase in mora for mrph in phrase])
+                out.write(p + '\t' + poem[1] + '\n')
     print('done')
 
 
